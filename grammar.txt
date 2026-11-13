@@ -3,16 +3,25 @@ MiniC Grammar in BNF
 
 This is the core MiniC grammar from the coursework specification.
 
+-- Adding an extra start production 
+program' ::= program EOF 
+
 program ::= extern_list decl_list
          | decl_list
 
-extern_list ::= extern_list extern
-             | extern
+-- Direct left recursion removed
+extern_list ::= extern extern_list' 
+extern_list' ::= extern extern_list'|epsilon
 
 extern ::= "extern" type_spec IDENT "(" params ")" ";"
 
-decl_list ::= decl_list decl
-           | decl
+-- Direct left recursion removed
+decl_list     ::= decl decl_list'
+decl_list'    ::= decl decl_list'|epsilon
+
+-- Left factored
+decl ::= "void" IDENT fun_rest | var_type IDENT decl_tail 
+decl_tail ::= ";" | fun_rest 
 
 decl ::= var_decl
       | fun_decl
