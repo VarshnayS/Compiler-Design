@@ -709,23 +709,7 @@ static std::unique_ptr<ASTnode> ParseBoolExpr() {
   return std::move(Result);
 }
 
-// param ::= var_type IDENT
-static std::unique_ptr<ParamAST> ParseParam() {
-
-  std::string Type = CurTok.lexeme; // keep track of the type of the param
-  getNextToken();                   // eat the type token
-  std::unique_ptr<ParamAST> P;
-
-  if (CurTok.type == IDENT) { // parameter declaration
-    std::string Name = CurTok.getIdentifierStr();
-    getNextToken(); // eat "IDENT"
-  }
-
-  return P;
-}
-
-// param_list_prime ::= "," param param_list_prime
-//                   |  ε
+// param_list_prime ::= "," param param_list_prime|eplison
 static std::vector<std::unique_ptr<ParamAST>> ParseParamListPrime() {
   std::vector<std::unique_ptr<ParamAST>> param_list;
 
@@ -768,6 +752,46 @@ static std::unique_ptr<ParamAST> ParseParam() {
   getNextToken(); // eat IDENT
 
   return std::make_unique<ParamAST>(Name, Type);
+}
+
+// param_list ::= param param_list_prime
+static std::vector<std::unique_ptr<ParamAST>> ParseParamList() {
+  std::vector<std::unique_ptr<ParamAST>> param_list;
+
+  auto param = ParseParam();
+  if (param) {
+    param_list.push_back(std::move(param));
+    auto param_list_prime = ParseParamListPrime();
+    for (unsigned i = 0; i < param_list_prime.size(); i++) {
+      param_list.push_back(std::move(param_list_prime.at(i)));
+    }
+  }
+
+  return param_list;
+}
+
+// params ::= param_list |"void" | epsilon
+static std::vector<std::unique_ptr<ParamAST>> ParseParams() {
+  std::vector<std::unique_ptr<ParamAST>> param_list;
+
+  if (CurTok.type == INT_TOK || CurTok.type == FLOAT_TOK || CurTok.type == BOOL_TOK) { // FIRST(param_list)
+    auto list = ParseParamList();
+    for (unsigned i = 0; i < list.size(); i++) {
+      param_list.push_back(std::move(list.at(i)));
+    }
+  } else if (CurTok.type == VOID_TOK) { // FIRST("void")
+    getNextToken(); // eat 'void'
+    if (CurTok.type != RPAR) {
+      LogError(CurTok, "expected ')' after 'void' in parameter list");
+    }
+  } else if (CurTok.type == RPAR) { // FOLLOW(params)
+    // expand by params ::= ε
+    // do nothing
+  } else {
+    LogError(CurTok, "expected 'int', 'float', 'bool', 'void' or ')' in parameter list");
+  }
+
+  return param_list;
 }
 
 /*** TODO : Task 2 - Parser ***
