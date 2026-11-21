@@ -423,6 +423,13 @@ static TOKEN getNextToken() {
 
 static void putBackToken(TOKEN tok) { tok_buffer.push_front(tok); }
 
+// to look at the token after CurTok without consuming it
+static TOKEN peekToken() {
+  if (tok_buffer.empty())
+    tok_buffer.push_back(gettok());
+  return tok_buffer.front();
+}
+
 /// ASTnode - Base class for all AST nodes.
 class ASTnode {
 
@@ -430,8 +437,6 @@ public:
   virtual ~ASTnode() {}
   virtual Value *codegen() { return nullptr; };
   virtual std::string to_string() const { return ""; };
-  // so the parser can check whether the left of = is a variable
-  virtual bool isVariable() const { return false; }
 };
 
 /// IntASTnode - Class for integer literals like 1, 2, 10,
@@ -482,8 +487,6 @@ public:
   const IDENT_TYPE getVarType() const { return VarType; }
   // getter for token
   const TOKEN &getTok() const { return Tok; }
-  // ensures only variables appear on left side of '='
-  bool isVariable() const override { return true; }
 };
 
 /// ParamAST - Class for a parameter declaration
@@ -546,7 +549,7 @@ public:
   std::vector<std::unique_ptr<ParamAST>> &getParams() { return Params; }
 };
 
-// Binary expression, such as a + b or a && b.
+// Binary expression
 class BinaryExprAST : public ASTnode {
   std::unique_ptr<ASTnode> Left;
   TOKEN OpTok;
@@ -559,7 +562,7 @@ public:
         Right(std::move(right)) {}
 };
 
-// Unary expression, such as -x or !x.
+// unary expression.
 class UnaryExprAST : public ASTnode {
   TOKEN OpTok;
   std::unique_ptr<ASTnode> Operand;
@@ -567,6 +570,28 @@ class UnaryExprAST : public ASTnode {
 public:
   UnaryExprAST(TOKEN opTok, std::unique_ptr<ASTnode> operand)
       : OpTok(std::move(opTok)), Operand(std::move(operand)) {}
+};
+
+/// For assignment
+class AssignExprAST : public ASTnode {
+  std::unique_ptr<VariableASTnode> Var;
+  std::unique_ptr<ASTnode> RHS;
+
+public:
+  AssignExprAST(std::unique_ptr<VariableASTnode> var,
+                std::unique_ptr<ASTnode> rhs)
+      : Var(std::move(var)), RHS(std::move(rhs)) {}
+};
+
+/// ProgramAST - Root of the AST: externs followed by declarations
+class ProgramAST : public ASTnode {
+  std::vector<std::unique_ptr<FunctionPrototypeAST>> Externs;
+  std::vector<std::unique_ptr<ASTnode>> Decls;
+
+public:
+  ProgramAST(std::vector<std::unique_ptr<FunctionPrototypeAST>> externs,
+             std::vector<std::unique_ptr<ASTnode>> decls)
+      :Externs(std::move(externs)), Decls(std::move(decls)) {}
 };
 
 /// BlockAST - Class for a block with declarations followed by statements
