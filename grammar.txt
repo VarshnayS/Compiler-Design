@@ -62,11 +62,11 @@ else_stmt ::= "else" block | epsilon
 return_stmt ::= "return" return_tail
 return_tail ::= ";" | expr ";"
 
--- Not LL(1): both alternatives can start with IDENT. Resolved with LL(2):
--- IDENT followed by "=" selects assignment.
-expr ::= IDENT "=" expr | rval
+-- Rewritten to LL(1)
+expr ::= rval assign_tail
+assign_tail ::= "=" expr | epsilon
 
--- Ambiguity removed (one level per precedence, loosest first),
+-- Ambiguity removed 
 -- then direct left recursion removed from each level
 rval ::= and_expr rval'
 rval' ::= "||" and_expr rval' | epsilon
@@ -78,8 +78,7 @@ eq_expr ::= relational_expr eq_expr'
 eq_expr' ::= "==" relational_expr eq_expr' | "!=" relational_expr eq_expr' | epsilon
 
 relational_expr ::= add_expr relational_expr'
-relational_expr' ::= "<=" add_expr relational_expr' | "<" add_expr relational_expr'
-           | ">=" add_expr relational_expr' | ">" add_expr relational_expr' | epsilon
+relational_expr' ::= "<=" add_expr relational_expr' | "<" add_expr relational_expr' | ">=" add_expr relational_expr' | ">" add_expr relational_expr' | epsilon
 
 add_expr ::= mul_expr add_expr'
 add_expr' ::= "+" mul_expr add_expr' | "-" mul_expr add_expr' | epsilon
@@ -98,3 +97,14 @@ args ::= arg_list | epsilon
 -- Direct left recursion removed
 arg_list ::= expr arg_list'
 arg_list' ::= "," expr arg_list' | epsilon
+
+Notes
+-----
+
+The coursework asks you to transform productions as needed into an equivalent
+LL(k) form suitable for predictive recursive descent parsing. In particular,
+the grammar above contains left-recursive productions that should not be used
+directly as recursive descent procedures.
+
+The array extension in the Grand Finale requires extending this grammar to
+support 1D, 2D, and 3D array declarations and array element access.
