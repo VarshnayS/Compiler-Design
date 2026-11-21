@@ -794,7 +794,6 @@ static std::vector<std::unique_ptr<ParamAST>> ParseParams() {
   return param_list;
 }
 
-START
 // args ::= arg_list | epsilon
 // arg_list ::= expr arg_list'
 // arg_list' ::= "," expr arg_list' | epsilon
@@ -960,7 +959,6 @@ static std::unique_ptr<ASTnode> ParseExper() {
   }
   return ParseRval();
 }
-END
 
 // expr_stmt ::= expr ";"|  ";"
 static std::unique_ptr<ASTnode> ParseExperStmt() {
@@ -1045,12 +1043,13 @@ static std::unique_ptr<ASTnode> ParseIfStmt() {
   return nullptr;
 }
 
-// return_stmt ::= "return" ";"
-//             |  "return" expr ";"
+// return_stmt ::= "return" ";" | "return" expr ";"
 static std::unique_ptr<ASTnode> ParseReturnStmt() {
-  getNextToken(); // eat the return
+  // eat the return
+  getNextToken(); 
   if (CurTok.type == SC) {
-    getNextToken(); // eat the ;
+    // eat the ;
+    getNextToken(); 
     // return a null value
     return std::make_unique<ReturnAST>(std::move(nullptr));
   } else if (CurTok.type == NOT || CurTok.type == MINUS ||
@@ -1063,7 +1062,7 @@ static std::unique_ptr<ASTnode> ParseReturnStmt() {
       return nullptr;
 
     if (CurTok.type == SC) {
-      getNextToken(); // eat the ;
+      getNextToken(); 
       return std::make_unique<ReturnAST>(std::move(val));
     } else
       return LogError(CurTok, "expected ';'");
@@ -1096,11 +1095,7 @@ static std::unique_ptr<ASTnode> ParseWhileStmt() {
     return LogError(CurTok, "expected (");
 }
 
-// stmt ::= expr_stmt
-//      |  block
-//      |  if_stmt
-//      |  while_stmt
-//      |  return_stmt
+// stmt ::= expr_stmt|  block| if_stmt| while_stmt| return_stmt
 static std::unique_ptr<ASTnode> ParseStmt() {
 
   if (CurTok.type == NOT || CurTok.type == MINUS || CurTok.type == PLUS ||
@@ -1137,7 +1132,7 @@ static std::unique_ptr<ASTnode> ParseStmt() {
     }
   }
   // else if(CurTok.type == RBRA) { // FOLLOW(stmt_list_prime)
-  //  expand by stmt_list_prime ::= ε
+  //  expand by stmt_list_prime ::= epsilon
   //  do nothing
   //}
   else { // syntax error
