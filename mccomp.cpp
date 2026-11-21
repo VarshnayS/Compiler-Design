@@ -794,46 +794,185 @@ static std::vector<std::unique_ptr<ParamAST>> ParseParams() {
   return param_list;
 }
 
-/*** TODO : Task 2 - Parser ***
+START
+// args ::= arg_list | epsilon
+// arg_list ::= expr arg_list'
+// arg_list' ::= "," expr arg_list' | epsilon
+static std::vector<std::unique_ptr<ASTnode>> ParseArgs() {
+  std::vector<std::unique_ptr<ASTnode>> args;
+  if (CurTok.type == RPAR) // FOLLOW(args): empty argument list
+    return args;
 
-// args ::= arg_list
-//      |  ε
-// arg_list ::= arg_list "," expr
-//      | expr
-
-// rval ::= rval "||" rval
-//      | rval "&&" rval
-//      | rval "==" rval | rval "!=" rval
-//      | rval "<=" rval | rval "<" rval | rval ">=" rval | rval ">" rval
-//      | rval "+" rval | rval "-" rval
-//      | rval "*" rval | rval "/" rval | rval "%" rval
-//      | "-" rval | "!" rval
-//      | "(" expr ")"
-//      | IDENT | IDENT "(" args ")"
-//      | INT_LIT | FLOAT_LIT | BOOL_LIT
-**/
-
-// expr ::= IDENT "=" expr
-//      |  rval
-static std::unique_ptr<ASTnode> ParseExper() {
-  //
-  // TO BE COMPLETED
-  //
-  return nullptr;
+  args.push_back(ParseExper());
+  while (CurTok.type == COMMA) { // arg_list'
+    // eat ','
+    getNextToken();
+    args.push_back(ParseExper());
+  }
+  if (CurTok.type != RPAR)
+    LogError(CurTok, "expected ',' or ')' in the function call args");
+  return args;
 }
 
-// expr_stmt ::= expr ";"
-//            |  ";"
+// primary ::= "(" expr ")" | IDENT identifier_tail| INT_LIT | FLOAT_LIT | BOOL_LIT
+// identifier_tail ::= "(" args ")" | epsilon
+static std::unique_ptr<ASTnode> ParsePrimary() {
+  switch (CurTok.type) {
+  case INT_LIT:
+    return ParseIntNumberExpr();
+  case FLOAT_LIT:
+    return ParseFloatNumberExpr();
+  case BOOL_LIT:
+    return ParseBoolExpr();
+  case LPAR: {
+    getNextToken(); // eat '('
+    auto E = ParseExper();
+    if (CurTok.type != RPAR)
+      return LogError(CurTok, "expected ')' to close parenthesised expression");
+    getNextToken(); // eat ')'
+    return E;
+  }
+  case IDENT: {
+    TOKEN IdTok = CurTok;
+    getNextToken(); // eat IDENT
+    if (CurTok.type == LPAR) { // identifier_tail ::= "(" args ")"
+      // eat '('
+      getNextToken();          
+      auto Args = ParseArgs();
+       // eat ')'
+      getNextToken();
+      return std::make_unique<ArgsAST>(IdTok.lexeme, std::move(Args));
+    }
+    // identifier_tail ::= ε
+    return std::make_unique<VariableASTnode>(IdTok, IdTok.lexeme);
+  }
+  default:
+    return LogError(CurTok, "expected an expression - an identifier, literal, '(', '-' or '!'");
+  }
+}
+
+// unary ::= "-" unary | "!" unary | primary
+static std::unique_ptr<ASTnode> ParseUnary() {
+  if (CurTok.type == MINUS || CurTok.type == NOT) {
+    TOKEN OpTok = CurTok;
+    getNextToken(); // eat '-' or '!'
+    auto Operand = ParseUnary();
+    return std::make_unique<UnaryExprAST>(OpTok, std::move(Operand));
+  }
+  return ParsePrimary();
+}
+
+// mul_expr ::= unary mul_expr'
+// mul_expr' ::= ("*" | "/" | "%") unary mul_expr' | epsilon
+static std::unique_ptr<ASTnode> ParseMulExpr() {
+  auto LHS = ParseUnary();
+  while (CurTok.type == ASTERIX || CurTok.type == DIV || CurTok.type == MOD) {
+    TOKEN OpTok = CurTok;
+    // eat operator
+    getNextToken(); 
+    auto RHS = ParseUnary();
+    LHS = std::make_unique<BinaryExprAST>(std::move(LHS), OpTok, std::move(RHS));
+  }
+  return LHS;
+}
+
+// add_expr ::= mul_expr add_expr'
+// add_expr' ::= ("+" | "-") mul_expr add_expr' | ε
+static std::unique_ptr<ASTnode> ParseAddExpr() {
+  auto LHS = ParseMulExpr();
+  while (CurTok.type == PLUS || CurTok.type == MINUS) {
+    TOKEN OpTok = CurTok;
+    // eat operator
+    getNextToken(); 
+    auto RHS = ParseMulExpr();
+    LHS = std::make_unique<BinaryExprAST>(std::move(LHS), OpTok, std::move(RHS));
+  }
+  return LHS;
+}
+
+// relational_expr ::= add_expr relational_expr'
+// relational_expr' ::= ("<=" | "<" | ">=" | ">") add_expr relational_expr' | epsilon
+static std::unique_ptr<ASTnode> ParseRelationalExpr() {
+  auto LHS = ParseAddExpr();
+  while (CurTok.type == LE || CurTok.type == LT || CurTok.type == GE ||
+         CurTok.type == GT) {
+    TOKEN OpTok = CurTok;
+    // eat operator
+    getNextToken(); 
+    auto RHS = ParseAddExpr();
+    LHS = std::make_unique<BinaryExprAST>(std::move(LHS), OpTok, std::move(RHS));
+  }
+  return LHS;
+}
+
+// eq_expr ::= relational_expr eq_expr'
+// eq_expr' ::= ("==" | "!=") relational_expr eq_expr' | epsilon
+static std::unique_ptr<ASTnode> ParseEqExpr() {
+  auto LHS = ParseRelationalExpr();
+  while (CurTok.type == EQ || CurTok.type == NE) {
+    TOKEN OpTok = CurTok;
+    // eat operator
+    getNextToken(); 
+    auto RHS = ParseRelationalExpr();
+    LHS = std::make_unique<BinaryExprAST>(std::move(LHS), OpTok, std::move(RHS));
+  }
+  return LHS;
+}
+
+// and_expr ::= eq_expr and_expr'
+// and_expr' ::= "&&" eq_expr and_expr' | epsilon
+static std::unique_ptr<ASTnode> ParseAndExpr() {
+  auto LHS = ParseEqExpr();
+  while (CurTok.type == AND) {
+    TOKEN OpTok = CurTok;
+    // eat '&&'
+    getNextToken(); 
+    auto RHS = ParseEqExpr();
+    LHS = std::make_unique<BinaryExprAST>(std::move(LHS), OpTok, std::move(RHS));
+  }
+  return LHS;
+}
+
+// rval ::= and_expr rval'
+// rval' ::= "||" and_expr rval' | epsilon
+static std::unique_ptr<ASTnode> ParseRval() {
+  auto LHS = ParseAndExpr();
+  while (CurTok.type == OR) {
+    TOKEN OpTok = CurTok;
+    // eat '||'
+    getNextToken(); 
+    auto RHS = ParseAndExpr();
+    LHS = std::make_unique<BinaryExprAST>(std::move(LHS), OpTok, std::move(RHS));
+  }
+  return LHS;
+}
+
+// expr ::= IDENT "=" expr | rval
+// LL(2): If the current token is a name and the next token is '=', parse an assignment
+static std::unique_ptr<ASTnode> ParseExper() {
+  if (CurTok.type == IDENT && peekToken().type == ASSIGN) {
+    TOKEN IdTok = CurTok;
+    getNextToken(); // eat IDENT
+    getNextToken(); // eat '='
+    auto Var = std::make_unique<VariableASTnode>(IdTok, IdTok.lexeme);
+    auto RHS = ParseExper(); // right-recursive, so a = b = c is right-associative
+    return std::make_unique<AssignExprAST>(std::move(Var), std::move(RHS));
+  }
+  return ParseRval();
+}
+END
+
+// expr_stmt ::= expr ";"|  ";"
 static std::unique_ptr<ASTnode> ParseExperStmt() {
 
   if (CurTok.type == SC) { // empty statement
-    getNextToken();        // eat ;
+    getNextToken();   
     return nullptr;
   } else {
     auto expr = ParseExper();
     if (expr) {
       if (CurTok.type == SC) {
-        getNextToken(); // eat ;
+        getNextToken(); 
         return expr;
       } else {
         LogError(CurTok, "expected ';' to end expression statement");
@@ -844,14 +983,12 @@ static std::unique_ptr<ASTnode> ParseExperStmt() {
   return nullptr;
 }
 
-// else_stmt  ::= "else" block
-//             |  ε
+// else_stmt  ::= "else" block | epsilon
 static std::unique_ptr<ASTnode> ParseElseStmt() {
 
   if (CurTok.type == ELSE) { // FIRST(else_stmt)
-    // expand by else_stmt  ::= "else" "{" stmt "}"
-    getNextToken(); // eat "else"
-
+    // expand by else_stmt  ::= "else" "{" stmt"}"
+    getNextToken(); 
     if (!(CurTok.type == LBRA)) {
       return LogError(
           CurTok, "expected { to start else block of if-then-else statment");
@@ -868,7 +1005,7 @@ static std::unique_ptr<ASTnode> ParseElseStmt() {
              CurTok.type == IF || CurTok.type == ELSE ||
              CurTok.type == RETURN ||
              CurTok.type == RBRA) { // FOLLOW(else_stmt)
-    // expand by else_stmt  ::= ε
+    // expand by else_stmt  ::= epsilon
     // return an empty statement
     return nullptr;
   } else
@@ -900,9 +1037,7 @@ static std::unique_ptr<ASTnode> ParseIfStmt() {
     if (!Then)
       return nullptr;
     auto Else = ParseElseStmt();
-
-    return std::make_unique<IfExprAST>(std::move(Cond), std::move(Then),
-                                       std::move(Else));
+    return std::make_unique<IfExprAST>(std::move(Cond), std::move(Then), std::move(Else));
 
   } else
     return LogError(CurTok, "expected (");
