@@ -709,6 +709,21 @@ static std::unique_ptr<ASTnode> ParseBoolExpr() {
   return std::move(Result);
 }
 
+// param ::= var_type IDENT
+static std::unique_ptr<ParamAST> ParseParam() {
+
+  std::string Type = CurTok.lexeme; // keep track of the type of the param
+  getNextToken();                   // eat the type token
+  std::unique_ptr<ParamAST> P;
+
+  if (CurTok.type == IDENT) { // parameter declaration
+    std::string Name = CurTok.getIdentifierStr();
+    getNextToken(); // eat "IDENT"
+  }
+
+  return P;
+}
+
 // param_list_prime ::= "," param param_list_prime
 //                   |  ε
 static std::vector<std::unique_ptr<ParamAST>> ParseParamListPrime() {
@@ -719,7 +734,6 @@ static std::vector<std::unique_ptr<ParamAST>> ParseParamListPrime() {
 
     auto param = ParseParam();
     if (param) {
-      printf("found param in param_list_prime: %s\n", param->getName().c_str());
       param_list.push_back(std::move(param));
       auto param_list_prime = ParseParamListPrime();
       for (unsigned i = 0; i < param_list_prime.size(); i++) {
@@ -738,70 +752,22 @@ static std::vector<std::unique_ptr<ParamAST>> ParseParamListPrime() {
 
 // param ::= var_type IDENT
 static std::unique_ptr<ParamAST> ParseParam() {
-
-  std::string Type = CurTok.lexeme; // keep track of the type of the param
-  getNextToken();                   // eat the type token
-  std::unique_ptr<ParamAST> P;
-
-  if (CurTok.type == IDENT) { // parameter declaration
-    std::string Name = CurTok.getIdentifierStr();
-    getNextToken(); // eat "IDENT"
+  if (CurTok.type != INT_TOK && CurTok.type != FLOAT_TOK &&
+      CurTok.type != BOOL_TOK) {
+    LogError(CurTok, "expected 'int', 'float' or 'bool' in parameter declaration");
+    return nullptr;
   }
+  std::string Type = CurTok.lexeme;
+  getNextToken(); // eat type
 
-  return P;
-}
-
-// param_list ::= param param_list_prime
-static std::vector<std::unique_ptr<ParamAST>> ParseParamList() {
-  std::vector<std::unique_ptr<ParamAST>> param_list;
-
-  auto param = ParseParam();
-  if (param) {
-    param_list.push_back(std::move(param));
-    auto param_list_prime = ParseParamListPrime();
-    for (unsigned i = 0; i < param_list_prime.size(); i++) {
-      param_list.push_back(std::move(param_list_prime.at(i)));
-    }
+  if (CurTok.type != IDENT) {
+    LogError(CurTok, "expected parameter name after type");
+    return nullptr;
   }
+  std::string Name = CurTok.getIdentifierStr();
+  getNextToken(); // eat IDENT
 
-  return param_list;
-}
-
-// params ::= param_list
-//         |  ε
-static std::vector<std::unique_ptr<ParamAST>> ParseParams() {
-  std::vector<std::unique_ptr<ParamAST>> param_list;
-
-  std::string Type;
-  std::string Name = "";
-
-  if (CurTok.type == INT_TOK || CurTok.type == FLOAT_TOK ||
-      CurTok.type == BOOL_TOK) { // FIRST(param_list)
-
-    auto list = ParseParamList();
-    for (unsigned i = 0; i < list.size(); i++) {
-      param_list.push_back(std::move(list.at(i)));
-    }
-
-  } else if (CurTok.type == VOID_TOK) { // FIRST("void")
-    // void
-    // check that the next token is a )
-    getNextToken(); // eat 'void'
-    if (CurTok.type != RPAR) {
-      LogError(CurTok, "expected ')', after 'void' in \
-       end of function declaration");
-    }
-  } else if (CurTok.type == RPAR) { // FOLLOW(params)
-    // expand by params ::= ε
-    // do nothing
-  } else {
-    LogError(
-        CurTok,
-        "expected 'int', 'bool' or 'float' in function declaration or ') in \
-       end of function declaration");
-  }
-
-  return param_list;
+  return std::make_unique<ParamAST>(Name, Type);
 }
 
 /*** TODO : Task 2 - Parser ***
@@ -1312,10 +1278,7 @@ static std::unique_ptr<FunctionPrototypeAST> ParseExtern() {
 
           auto P =
               ParseParams(); // parse the parameters, returns a vector of params
-          if (P.size() == 0)
-            return nullptr;
-          else
-            fprintf(stderr, "Parsed parameter list for external function\n");
+              fprintf(stderr, "Parsed parameter list for external function\n");
 
           if (CurTok.type != RPAR) // syntax error
             return LogErrorP(
