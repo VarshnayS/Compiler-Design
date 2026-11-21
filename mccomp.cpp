@@ -430,6 +430,8 @@ public:
   virtual ~ASTnode() {}
   virtual Value *codegen() { return nullptr; };
   virtual std::string to_string() const { return ""; };
+  // so the parser can check whether the left of = is a variable
+  virtual bool isVariable() const { return false; }
 };
 
 /// IntASTnode - Class for integer literals like 1, 2, 10,
@@ -478,6 +480,10 @@ public:
   const std::string &getName() const { return Name; }
   const std::string &getType() const { return Tok.lexeme; }
   const IDENT_TYPE getVarType() const { return VarType; }
+  // getter for token
+  const TOKEN &getTok() const { return Tok; }
+  // ensures only variables appear on left side of '='
+  bool isVariable() const override { return true; }
 };
 
 /// ParamAST - Class for a parameter declaration
@@ -540,16 +546,27 @@ public:
   std::vector<std::unique_ptr<ParamAST>> &getParams() { return Params; }
 };
 
-class ExprAST : public ASTnode {
-  std::unique_ptr<ASTnode> Node1;
-  char Op;
-  std::unique_ptr<ASTnode> Node2;
+// Binary expression, such as a + b or a && b.
+class BinaryExprAST : public ASTnode {
+  std::unique_ptr<ASTnode> Left;
+  TOKEN OpTok;
+  std::unique_ptr<ASTnode> Right;
 
 public:
-  ExprAST(std::unique_ptr<ASTnode> node1, char op,
-          std::unique_ptr<ASTnode> node2)
-      : Node1(std::move(node1)), Op(op), Node2(std::move(node2)) {}
-  const std::string &getType();
+  BinaryExprAST(std::unique_ptr<ASTnode> left, TOKEN opTok,
+                std::unique_ptr<ASTnode> right)
+      : Left(std::move(left)), OpTok(std::move(opTok)),
+        Right(std::move(right)) {}
+};
+
+// Unary expression, such as -x or !x.
+class UnaryExprAST : public ASTnode {
+  TOKEN OpTok;
+  std::unique_ptr<ASTnode> Operand;
+
+public:
+  UnaryExprAST(TOKEN opTok, std::unique_ptr<ASTnode> operand)
+      : OpTok(std::move(opTok)), Operand(std::move(operand)) {}
 };
 
 /// BlockAST - Class for a block with declarations followed by statements
