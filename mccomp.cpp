@@ -688,6 +688,16 @@ static std::unique_ptr<ParamAST> ParseParam();
 static std::unique_ptr<VarDeclAST> ParseLocalDecl();
 static std::vector<std::unique_ptr<ASTnode>> ParseStmtListPrime();
 
+/// isFirstOfExpr - this returns true if token type t is in FIRST(expr)
+static bool isFirstOfExpr(int t) {
+  return t == IDENT || t == INT_LIT || t == FLOAT_LIT || t == BOOL_LIT || t == LPAR || t == MINUS || t == NOT;
+}
+
+/// isFirstOfStmt - returns true if token type t is in FIRST(stmt)
+static bool isFirstOfStmt(int t) {
+  return isFirstOfExpr(t) || t == SC || t == LBRA || t == IF || t == WHILE || t == RETURN;
+}
+
 // element ::= FLOAT_LIT
 static std::unique_ptr<ASTnode> ParseFloatNumberExpr() {
   auto Result = std::make_unique<FloatASTnode>(CurTok, CurTok.getFloatVal());
@@ -981,37 +991,20 @@ static std::unique_ptr<ASTnode> ParseExperStmt() {
   return nullptr;
 }
 
-// else_stmt  ::= "else" block | epsilon
+// else_stmt ::= "else" block | epsilon
 static std::unique_ptr<ASTnode> ParseElseStmt() {
-
-  if (CurTok.type == ELSE) { // FIRST(else_stmt)
-    // expand by else_stmt  ::= "else" "{" stmt"}"
-    getNextToken(); 
-    if (!(CurTok.type == LBRA)) {
-      return LogError(
-          CurTok, "expected { to start else block of if-then-else statment");
-    }
-    auto Else = ParseBlock();
-    if (!Else)
-      return nullptr;
-    return Else;
-  } else if (CurTok.type == NOT || CurTok.type == MINUS ||
-             CurTok.type == PLUS || CurTok.type == LPAR ||
-             CurTok.type == IDENT || CurTok.type == INT_LIT ||
-             CurTok.type == BOOL_LIT || CurTok.type == FLOAT_LIT ||
-             CurTok.type == SC || CurTok.type == LBRA || CurTok.type == WHILE ||
-             CurTok.type == IF || CurTok.type == ELSE ||
-             CurTok.type == RETURN ||
-             CurTok.type == RBRA) { // FOLLOW(else_stmt)
-    // expand by else_stmt  ::= epsilon
-    // return an empty statement
+  // FIRST(else_stmt)
+  if (CurTok.type == ELSE) {
+    // eat 'else'
+    getNextToken();
+    if (CurTok.type != LBRA)
+      return LogError(CurTok, "expected '{' to start else block");
+    return ParseBlock();
+  } else if (isFirstOfStmt(CurTok.type) || CurTok.type == RBRA) {
+    // FOLLOW(else_stmt): expand by else_stmt ::= epsilon
     return nullptr;
-  } else
-    LogError(CurTok, "expected 'else' or one of \
-    '!', '-', '+', '(' , IDENT , INT_LIT, BOOL_LIT, FLOAT_LIT, ';', \
-    '{', 'while', 'if', 'else', ε, 'return', '}' ");
-
-  return nullptr;
+  }
+  return LogError(CurTok, "expected 'else', a statement or '}' after if block");
 }
 
 // if_stmt ::= "if" "(" expr ")" block else_stmt
@@ -1052,11 +1045,8 @@ static std::unique_ptr<ASTnode> ParseReturnStmt() {
     getNextToken(); 
     // return a null value
     return std::make_unique<ReturnAST>(std::move(nullptr));
-  } else if (CurTok.type == NOT || CurTok.type == MINUS ||
-             CurTok.type == PLUS || CurTok.type == LPAR ||
-             CurTok.type == IDENT || CurTok.type == BOOL_LIT ||
-             CurTok.type == INT_LIT ||
-             CurTok.type == FLOAT_LIT) { // FIRST(expr)
+    // FIRST(expr)
+  } else if (isFirstOfExpr(CurTok.type)) {
     auto val = ParseExper();
     if (!val)
       return nullptr;
@@ -1098,10 +1088,8 @@ static std::unique_ptr<ASTnode> ParseWhileStmt() {
 // stmt ::= expr_stmt|  block| if_stmt| while_stmt| return_stmt
 static std::unique_ptr<ASTnode> ParseStmt() {
 
-  if (CurTok.type == NOT || CurTok.type == MINUS || CurTok.type == PLUS ||
-      CurTok.type == LPAR || CurTok.type == IDENT || CurTok.type == BOOL_LIT ||
-      CurTok.type == INT_LIT || CurTok.type == FLOAT_LIT ||
-      CurTok.type == SC) { // FIRST(expr_stmt)
+    // FIRST(expr_stmt) = FIRST(expr) plus ';'
+  if (isFirstOfExpr(CurTok.type) || CurTok.type == SC) {
     // expand by stmt ::= expr_stmt
     auto expr_stmt = ParseExperStmt();
     fprintf(stderr, "Parsed an expression statement\n");
@@ -1136,35 +1124,24 @@ static std::unique_ptr<ASTnode> ParseStmt() {
   //  do nothing
   //}
   else { // syntax error
-    return LogError(CurTok, "expected BLA BLA\n");
+    return LogError(CurTok, "expected a statement: expression, ';', '{', 'if', 'while' or 'return'");
   }
   return nullptr;
 }
 
-// stmt_list ::= stmt stmt_list_prime
+// stmt_list ::= stmt stmt_list | epsilon
 static std::vector<std::unique_ptr<ASTnode>> ParseStmtList() {
-  std::vector<std::unique_ptr<ASTnode>> stmt_list; // vector of statements
-  auto stmt = ParseStmt();
-  if (stmt) {
-    stmt_list.push_back(std::move(stmt));
-  }
-  auto stmt_list_prime = ParseStmtListPrime();
-  for (unsigned i = 0; i < stmt_list_prime.size(); i++) {
-    stmt_list.push_back(std::move(stmt_list_prime.at(i)));
-  }
-  return stmt_list;
+  return ParseStmtListPrime();
 }
 
 // stmt_list_prime ::= stmt stmt_list_prime
 //                  |  ε
 static std::vector<std::unique_ptr<ASTnode>> ParseStmtListPrime() {
-  std::vector<std::unique_ptr<ASTnode>> stmt_list; // vector of statements
-  if (CurTok.type == NOT || CurTok.type == MINUS || CurTok.type == PLUS ||
-      CurTok.type == LPAR || CurTok.type == IDENT || CurTok.type == BOOL_LIT ||
-      CurTok.type == INT_LIT || CurTok.type == FLOAT_LIT || CurTok.type == SC ||
-      CurTok.type == LBRA || CurTok.type == WHILE || CurTok.type == IF ||
-      CurTok.type == ELSE || CurTok.type == RETURN) { // FIRST(stmt)
-    // expand by stmt_list ::= stmt stmt_list_prime
+  // vector of statements
+  std::vector<std::unique_ptr<ASTnode>> stmt_list;
+
+  // FIRST(stmt)- expand by stmt_list ::= stmt stmt_list
+  if (isFirstOfStmt(CurTok.type)) {
     auto stmt = ParseStmt();
     if (stmt) {
       stmt_list.push_back(std::move(stmt));
@@ -1173,13 +1150,14 @@ static std::vector<std::unique_ptr<ASTnode>> ParseStmtListPrime() {
     for (unsigned i = 0; i < stmt_prime.size(); i++) {
       stmt_list.push_back(std::move(stmt_prime.at(i)));
     }
-
-  } else if (CurTok.type == RBRA) { // FOLLOW(stmt_list_prime)
-    // expand by stmt_list_prime ::= ε
-    // do nothing
+  } else if (CurTok.type == RBRA) {
+    // FOLLOW(stmt_list): expand by stmt_list ::= epsilon
+  } else {
+    LogError(CurTok, "expected a statement or '}'");
   }
-  return stmt_list; // note stmt_list can be empty as we can have empty blocks,
-                    // etc.
+
+  // stmt_list can be empty, e.g. an empty block
+  return stmt_list;
 }
 
 // local_decls_prime ::= local_decl local_decls_prime
@@ -1198,19 +1176,11 @@ static std::vector<std::unique_ptr<VarDeclAST>> ParseLocalDeclsPrime() {
     for (unsigned i = 0; i < prime.size(); i++) {
       local_decls_prime.push_back(std::move(prime.at(i)));
     }
-  } else if (CurTok.type == MINUS || CurTok.type == NOT ||
-             CurTok.type == LPAR || CurTok.type == IDENT ||
-             CurTok.type == INT_LIT || CurTok.type == FLOAT_LIT ||
-             CurTok.type == BOOL_LIT || CurTok.type == SC ||
-             CurTok.type == LBRA || CurTok.type == IF || CurTok.type == WHILE ||
-             CurTok.type == RETURN) { // FOLLOW(local_decls_prime)
-    // expand by local_decls_prime ::=  ε
-    // do nothing;
+    } else if (isFirstOfStmt(CurTok.type) ||
+             CurTok.type == RBRA) { // FOLLOW(local_decls)
+    // expand by local_decls ::= ε
   } else {
-    LogError(
-        CurTok,
-        "expected '-', '!', ('' , IDENT , STRING_LIT , INT_LIT , FLOAT_LIT, \
-      BOOL_LIT, ';', '{', 'if', 'while', 'return' after local variable declaration\n");
+    LogError(CurTok, "expected a declaration, a statement or '}'");
   }
 
   return local_decls_prime;
@@ -1266,19 +1236,12 @@ static std::vector<std::unique_ptr<VarDeclAST>> ParseLocalDecls() {
     for (unsigned i = 0; i < local_decls_prime.size(); i++) {
       local_decls.push_back(std::move(local_decls_prime.at(i)));
     }
-
-  } else if (CurTok.type == MINUS || CurTok.type == NOT ||
-             CurTok.type == LPAR || CurTok.type == IDENT ||
-             CurTok.type == INT_LIT || CurTok.type == RETURN ||
-             CurTok.type == FLOAT_LIT || CurTok.type == BOOL_LIT ||
-             CurTok.type == COMMA || CurTok.type == LBRA || CurTok.type == IF ||
-             CurTok.type == WHILE) { // FOLLOW(local_decls)
-                                     // do nothing
+  
+  // FOLLOW(local_decls)
+  } else if (isFirstOfStmt(CurTok.type) || CurTok.type == RBRA) { 
+    // expand by local_decls ::= epsilon
   } else {
-    LogError(
-        CurTok,
-        "expected '-', '!', '(' , IDENT , STRING_LIT , INT_LIT , FLOAT_LIT, \
-        BOOL_LIT, ';', '{', 'if', 'while', 'return'");
+    LogError(CurTok, "expected a declaration, a statement or '}'");
   }
 
   return local_decls;
@@ -1319,7 +1282,9 @@ static std::unique_ptr<ASTnode> ParseDecl() {
       CurTok.type == FLOAT_TOK || CurTok.type == BOOL_TOK) {
     getNextToken(); // eat the VOID_TOK, INT_TOK, BOOL_TOK or FLOAT_TOK
 
-    IdName = CurTok.getIdentifierStr(); // save the identifier name
+      if (CurTok.type == IDENT) {
+        IdName = CurTok.getIdentifierStr(); // save the identifier name
+      }
 
     if (CurTok.type == IDENT) {
       auto ident = std::make_unique<VariableASTnode>(CurTok, IdName);
