@@ -1481,13 +1481,18 @@ static std::unique_ptr<ASTnode> ParseDecl() {
     if (CurTok.type == IDENT) {
       auto ident = std::make_unique<VariableASTnode>(CurTok, IdName);
       getNextToken(); // eat the IDENT
-      if (CurTok.type ==
-          SC) {         // found ';' then this is a global variable declaration.
-        getNextToken(); // eat ;
+      // global variable or array declaration
+      if (CurTok.type == SC || CurTok.type == LBOX) {
+        // optional array sizes
+        auto dimensions = ParseArrayDimensions();
+        if (CurTok.type != SC)
+          return LogError(CurTok, "expected ';' to end global variable declaration");
+        // consume ';'
+        getNextToken();
 
         if (PrevTok.type != VOID_TOK)
           return std::make_unique<GlobVarDeclAST>(std::move(ident),
-                                                  PrevTok.lexeme);
+                                                  PrevTok.lexeme, dimensions);
         else
           return LogError(PrevTok,
                           "variables cannot have type 'void'");
@@ -1521,7 +1526,7 @@ static std::unique_ptr<ASTnode> ParseDecl() {
         return std::make_unique<FunctionDeclAST>(std::move(Proto),
                                                  std::move(B));
       } else
-        return LogError(CurTok, "expected ';' or '(' after the declared name");
+          return LogError(CurTok, "expected ';', '[' or '(' after the declared name");
     } else
       return LogError(CurTok, "expected a name after the type");
 
