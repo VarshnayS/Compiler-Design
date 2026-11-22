@@ -431,7 +431,7 @@ static TOKEN peekToken() {
 }
 
 /// indent - leading spaces for a node printed at the given tree depth
-static std::string indent(int depth) { return std::string(depth * 2, ' '); }
+static std::string astIndent(int depth) { return std::string(depth * 2, ' '); }
 
 /// ASTnode - Base class for all AST nodes.
 class ASTnode {
@@ -453,7 +453,7 @@ public:
   IntASTnode(TOKEN tok, int val) : Val(val), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "IntLiteral " + std::to_string(Val) + "\n";
+    return astIndent(depth) + "IntLiteral " + std::to_string(Val) + "\n";
   }
 };
 
@@ -466,7 +466,7 @@ public:
   BoolASTnode(TOKEN tok, bool B) : Bool(B), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "BoolLiteral " + (Bool ? "true" : "false") + "\n";
+    return astIndent(depth) + "BoolLiteral " + (Bool ? "true" : "false") + "\n";
   }
 };
 
@@ -480,7 +480,7 @@ public:
   const std::string &getType() const { return Tok.lexeme; }
   // print the source spelling so 3.14 shows as 3.14, not 3.140000
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "FloatLiteral " + Tok.lexeme + "\n";
+    return astIndent(depth) + "FloatLiteral " + Tok.lexeme + "\n";
   }
 };
 
@@ -502,7 +502,7 @@ public:
   // getter for token
   const TOKEN &getTok() const { return Tok; }
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "Variable " + Name + "\n";
+    return astIndent(depth) + "Variable " + Name + "\n";
   }
 };
 
@@ -517,7 +517,7 @@ public:
   const std::string &getName() const { return Name; }
   const std::string &getType() const { return Type; }
   std::string to_string(int depth) const {
-    return indent(depth) + "Param " + Name + " : " + Type + "\n";
+    return astIndent(depth) + "Param " + Name + " : " + Type + "\n";
   }
 };
 
@@ -539,7 +539,7 @@ public:
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "LocalVarDecl " + Var->getName() + " : " + Type + "\n";
+    return astIndent(depth) + "LocalVarDecl " + Var->getName() + " : " + Type + "\n";
   }
 };
 
@@ -554,7 +554,7 @@ public:
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "GlobalVarDecl " + Var->getName() + " : " + Type + "\n";
+    return astIndent(depth) + "GlobalVarDecl " + Var->getName() + " : " + Type + "\n";
   }
 };
 
@@ -575,7 +575,7 @@ public:
   std::vector<std::unique_ptr<ParamAST>> &getParams() { return Params; }
   // kind labels the line, e.g. "ExternFunction" or "FunctionPrototype"
   std::string to_string(int depth, const std::string &kind = "FunctionPrototype") const {
-    std::string s = indent(depth) + kind + " " + Name + " : " + Type + "\n";
+    std::string s = astIndent(depth) + kind + " " + Name + " : " + Type + "\n";
     for (const auto &P : Params)
       s += P->to_string(depth + 1);
     return s;
@@ -594,7 +594,7 @@ public:
       : Left(std::move(left)), OpTok(std::move(opTok)),
         Right(std::move(right)) {}
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "BinaryExpr '" + OpTok.lexeme + "'\n" +
+    return astIndent(depth) + "BinaryExpr '" + OpTok.lexeme + "'\n" +
            Left->to_string(depth + 1) + Right->to_string(depth + 1);
   }
 };
@@ -608,7 +608,7 @@ public:
   UnaryExprAST(TOKEN opTok, std::unique_ptr<ASTnode> operand)
       : OpTok(std::move(opTok)), Operand(std::move(operand)) {}
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "UnaryExpr '" + OpTok.lexeme + "'\n" +
+    return astIndent(depth) + "UnaryExpr '" + OpTok.lexeme + "'\n" +
            Operand->to_string(depth + 1);
   }
 };
@@ -623,7 +623,7 @@ public:
                 std::unique_ptr<ASTnode> rhs)
       : Var(std::move(var)), RHS(std::move(rhs)) {}
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "Assign\n" + Var->to_string(depth + 1) +
+    return astIndent(depth) + "Assign\n" + Var->to_string(depth + 1) +
            RHS->to_string(depth + 1);
   }
 };
@@ -638,7 +638,7 @@ public:
              std::vector<std::unique_ptr<ASTnode>> decls)
       : Externs(std::move(externs)), Decls(std::move(decls)) {}
   std::string to_string(int depth = 0) const override {
-    std::string s = indent(depth) + "Program\n";
+    std::string s = astIndent(depth) + "Program\n";
     for (const auto &E : Externs)
       s += E->to_string(depth + 1, "ExternFunction");
     for (const auto &D : Decls)
@@ -657,7 +657,7 @@ public:
            std::vector<std::unique_ptr<ASTnode>> stmts)
       : LocalDecls(std::move(localDecls)), Stmts(std::move(stmts)) {}
   std::string to_string(int depth = 0) const override {
-    std::string s = indent(depth) + "Block\n";
+    std::string s = astIndent(depth) + "Block\n";
     for (const auto &D : LocalDecls)
       s += D->to_string(depth + 1);
     for (const auto &S : Stmts)
@@ -676,7 +676,7 @@ public:
                   std::unique_ptr<ASTnode> Block)
       : Proto(std::move(Proto)), Block(std::move(Block)) {}
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "FunctionDecl\n" + Proto->to_string(depth + 1) +
+    return astIndent(depth) + "FunctionDecl\n" + Proto->to_string(depth + 1) +
            Block->to_string(depth + 1);
   }
 };
@@ -690,12 +690,12 @@ public:
             std::unique_ptr<ASTnode> Else)
       : Cond(std::move(Cond)), Then(std::move(Then)), Else(std::move(Else)) {}
   std::string to_string(int depth = 0) const override {
-    std::string s = indent(depth) + "If\n";
-    s += indent(depth + 1) + "Condition\n" + Cond->to_string(depth + 2);
-    s += indent(depth + 1) + "Then\n" + Then->to_string(depth + 2);
+    std::string s = astIndent(depth) + "If\n";
+    s += astIndent(depth + 1) + "Condition\n" + Cond->to_string(depth + 2);
+    s += astIndent(depth + 1) + "Then\n" + Then->to_string(depth + 2);
     // else branch is optional
     if (Else)
-      s += indent(depth + 1) + "Else\n" + Else->to_string(depth + 2);
+      s += astIndent(depth + 1) + "Else\n" + Else->to_string(depth + 2);
     return s;
   }
 };
@@ -708,8 +708,8 @@ public:
   WhileExprAST(std::unique_ptr<ASTnode> cond, std::unique_ptr<ASTnode> body)
       : Cond(std::move(cond)), Body(std::move(body)) {}
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "While\n" + indent(depth + 1) + "Condition\n" +
-           Cond->to_string(depth + 2) + indent(depth + 1) + "Body\n" +
+    return astIndent(depth) + "While\n" + astIndent(depth + 1) + "Condition\n" +
+           Cond->to_string(depth + 2) + astIndent(depth + 1) + "Body\n" +
            Body->to_string(depth + 2);
   }
 };
@@ -722,7 +722,7 @@ public:
   ReturnAST(std::unique_ptr<ASTnode> value) : Val(std::move(value)) {}
   // return value is optional: "return;" has none
   std::string to_string(int depth = 0) const override {
-    return indent(depth) + "Return\n" + (Val ? Val->to_string(depth + 1) : "");
+    return astIndent(depth) + "Return\n" + (Val ? Val->to_string(depth + 1) : "");
   }
 };
 
@@ -735,7 +735,7 @@ public:
   ArgsAST(const std::string &Callee, std::vector<std::unique_ptr<ASTnode>> list)
       : Callee(Callee), ArgsList(std::move(list)) {}
   std::string to_string(int depth = 0) const override {
-    std::string s = indent(depth) + "Call " + Callee + "\n";
+    std::string s = astIndent(depth) + "Call " + Callee + "\n";
     for (const auto &A : ArgsList)
       s += A->to_string(depth + 1);
     return s;
