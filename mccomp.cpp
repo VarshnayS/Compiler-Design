@@ -1002,8 +1002,9 @@ static std::vector<std::unique_ptr<ASTnode>> ParseArgs() {
   return args;
 }
 
-// primary ::= "(" expr ")" | IDENT identifier_tail| INT_LIT | FLOAT_LIT | BOOL_LIT
-// identifier_tail ::= "(" args ")" | epsilon
+// primary ::= "(" expr ")" | IDENT identifier_tail | INT_LIT | FLOAT_LIT | BOOL_LIT
+// identifier_tail ::= "(" args ")" | index_list
+// index_list ::= "[" expr "]" index_list | epsilon
 static std::unique_ptr<ASTnode> ParsePrimary() {
   switch (CurTok.type) {
   case INT_LIT:
@@ -1031,7 +1032,21 @@ static std::unique_ptr<ASTnode> ParsePrimary() {
       getNextToken();
       return std::make_unique<ArgsAST>(IdTok, IdTok.lexeme, std::move(Args));
     }
-    // identifier_tail ::= ε
+        // identifier_tail ::= index_list, an array element
+    if (CurTok.type == LBOX) {
+      std::vector<std::unique_ptr<ASTnode>> Indices;
+      while (CurTok.type == LBOX) {
+        // eat '['
+        getNextToken();
+        Indices.push_back(ParseExper());
+        if (CurTok.type != RBOX)
+          return LogError(CurTok, "expected ']' after array index");
+        // eat ']'
+        getNextToken();
+      }
+      return std::make_unique<ArrayAccessAST>(IdTok, IdTok.lexeme, std::move(Indices));
+    }
+    // index_list ::= epsilon, a plain variable
     return std::make_unique<VariableASTnode>(IdTok, IdTok.lexeme);
   }
   default:
