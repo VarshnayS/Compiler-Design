@@ -182,9 +182,10 @@ static TOKEN gettok() {
   static int LastChar = ' ';
   static int NextChar = ' ';
 
-  // Skip any whitespace.
+  // Skip any whitespace
   while (isspace(LastChar)) {
-    if (LastChar == '\n' || LastChar == '\r') {
+    // only counting '\n' so that the Windows "\r\n" endings count as one line
+    if (LastChar == '\n') {
       lineNo++;
       columnNo = 1;
     }
@@ -277,36 +278,38 @@ static TOKEN gettok() {
     return returnTok(",", COMMA);
   }
 
-  if (isdigit(LastChar) || LastChar == '.') { // Number: [0-9]+.
+  if (isdigit(LastChar) || LastChar == '.') { 
     std::string NumStr;
 
-    if (LastChar == '.') { // Floatingpoint Number: .[0-9]+
+    if (LastChar == '.') {
       do {
         NumStr += LastChar;
         LastChar = getc(pFile);
         columnNo++;
       } while (isdigit(LastChar));
-
-      //   FloatVal = strtof(NumStr.c_str(), nullptr);
-      return returnTok(NumStr, FLOAT_LIT);
+      if (NumStr == ".")
+        return LogLexicalError(returnTok(NumStr, INVALID), "invalid character '.'");
+      return LogLexicalError(returnTok(NumStr, INVALID), "improperly written float '" + NumStr + "', a digit is needed before '.'");
     } else {
-      do { // Start of Number: [0-9]+
+      do { 
         NumStr += LastChar;
         LastChar = getc(pFile);
         columnNo++;
       } while (isdigit(LastChar));
 
-      if (LastChar == '.') { // Floatingpoint Number: [0-9]+.[0-9]+)
+      if (LastChar == '.') { 
         do {
           NumStr += LastChar;
           LastChar = getc(pFile);
           columnNo++;
         } while (isdigit(LastChar));
 
-        // FloatVal = strtof(NumStr.c_str(), nullptr);
+        if (NumStr.back() == '.')
+          return LogLexicalError(returnTok(NumStr, INVALID), "malformed float '" + NumStr + "', a digit is needed after '.'");
         return returnTok(NumStr, FLOAT_LIT);
-      } else { // Integer : [0-9]+
-        // IntVal = strtod(NumStr.c_str(), nullptr);
+      } else { 
+        if (NumStr.length() > 10 || std::stoll(NumStr) > 2147483647)
+          return LogLexicalError(returnTok(NumStr, INVALID), "integer literal '" + NumStr + "' is too large for int");
         return returnTok(NumStr, INT_LIT);
       }
     }
@@ -314,14 +317,13 @@ static TOKEN gettok() {
 
   if (LastChar == '&') {
     NextChar = getc(pFile);
-    if (NextChar == '&') { // AND: &&
+    if (NextChar == '&') { 
       LastChar = getc(pFile);
       columnNo += 2;
       return returnTok("&&", AND);
     } else {
       LastChar = NextChar;
       columnNo++;
-      // a single '&' is not a MiniC token
       return LogLexicalError(returnTok("&", INVALID), "invalid character '&', did you mean '&&'?");
     }
   }
@@ -1575,22 +1577,22 @@ static std::unique_ptr<Module> TheModule;
 
 // local variable scopes, innermost scope at the back
 static std::vector<std::map<std::string, AllocaInst *>> Scopes;
-// global variables by name
+// global variables 
 static std::map<std::string, GlobalVariable *> GlobalNamedValues;
 // return type of the function being generated
 static llvm::Type *CurrentReturnType = nullptr;
-// set so a function body shares the parameters' scope
+// set so a function body shares the parameters's scope
 static bool NextBlockIsFunctionBody = false;
 
-/// noPos - token with no source position
-static TOKEN noPos() {
+/// token with no source position
+static TOKEN (noPosition) {
   TOKEN t;
   t.lineNo = 0;
   t.columnNo = 0;
   return t;
 }
 
-/// LogSemanticError - report a semantic error of the given kind (e.g. Type, Scope) and stop
+/// LogSemanticError - report a semantic error (e.g. Type, Scope) and stop
 static Value *LogSemanticError(const TOKEN &tok, const std::string &kind, const std::string &msg) {
   if (tok.lineNo > 0)
     fprintf(stderr, "%d:%d %s error: %s\n", tok.lineNo, tok.columnNo, kind.c_str(), msg.c_str());
@@ -1600,7 +1602,7 @@ static Value *LogSemanticError(const TOKEN &tok, const std::string &kind, const 
   return nullptr;
 }
 
-/// getLLVMType - MiniC type name to LLVM type
+/// MiniC type name to LLVM type
 static llvm::Type *getLLVMType(const std::string &name) {
   if (name == "int")
     return llvm::Type::getInt32Ty(TheContext);
@@ -1611,7 +1613,7 @@ static llvm::Type *getLLVMType(const std::string &name) {
   return llvm::Type::getVoidTy(TheContext);
 }
 
-/// typeName - MiniC name of an LLVM type, for error messages
+/// MiniC name of an LLVM type (for error messages)
 static std::string typeName(llvm::Type *T) {
   if (T->isIntegerTy(1))
     return "bool";
@@ -1624,7 +1626,7 @@ static std::string typeName(llvm::Type *T) {
   return "unknown";
 }
 
-/// typeRank - orders bool < int < float to find the wider type
+/// orders bool < int < float to find the wider type
 static int typeRank(llvm::Type *T) {
   if (T->isIntegerTy(1))
     return 1;
@@ -1635,21 +1637,21 @@ static int typeRank(llvm::Type *T) {
   return 0;
 }
 
-/// zeroValue - zero constant of a type, used to initialise variables
+/// zero constant of a type- used to initialise variables
 static Constant *zeroValue(llvm::Type *T) {
   if (T->isFloatTy())
     return ConstantFP::get(T, 0.0);
   return ConstantInt::get(T, 0);
 }
 
-/// widen - convert V to type T if widening, otherwise a semantic error
+/// widen - convert V to type T if widening, otherwise its a semantic error
 static Value *widen(Value *V, llvm::Type *T, const TOKEN &tok, const std::string &context) {
   llvm::Type *From = V->getType();
   if (From == T)
     return V;
   if (From->isVoidTy())
     return LogSemanticError(tok, "Type", "void value used in " + context);
-  // bool to int, true becomes 1
+  // bool to int
   if (From->isIntegerTy(1) && T->isIntegerTy(32))
     return Builder.CreateZExt(V, T, "booltoint");
   // bool to float
@@ -1658,12 +1660,10 @@ static Value *widen(Value *V, llvm::Type *T, const TOKEN &tok, const std::string
   // int to float
   if (From->isIntegerTy(32) && T->isFloatTy())
     return Builder.CreateSIToFP(V, T, "inttofloat");
-  return LogSemanticError(tok, "Type", "narrowing conversion from " + typeName(From) +
-                                   " to " + typeName(T) + " in " + context +
-                                   " is not allowed");
+  return LogSemanticError(tok, "Type", "narrowing conversion from " + typeName(From) + " to " + typeName(T) + " in " + context + " is not allowed");
 }
 
-/// toBool - any scalar to bool by comparing with zero, as in C
+/// toBool - any scalar to bool by comparing with zero
 static Value *toBool(Value *V, const TOKEN &tok, const std::string &context) {
   llvm::Type *T = V->getType();
   if (T->isIntegerTy(1))
@@ -1675,7 +1675,6 @@ static Value *toBool(Value *V, const TOKEN &tok, const std::string &context) {
   return LogSemanticError(tok, "Type", "void value used as a condition in " + context);
 }
 
-/// lookupVariable - innermost scope first, then globals
 static Value *lookupVariable(const std::string &name, llvm::Type *&type) {
   for (auto it = Scopes.rbegin(); it != Scopes.rend(); ++it) {
     auto found = it->find(name);
@@ -1692,13 +1691,13 @@ static Value *lookupVariable(const std::string &name, llvm::Type *&type) {
   return nullptr;
 }
 
-/// CreateEntryBlockAlloca - stack slot in the function's entry block
+// stack slot in the functions entry block
 static AllocaInst *CreateEntryBlockAlloca(Function *F, llvm::Type *T, const std::string &name) {
   IRBuilder<> TmpB(&F->getEntryBlock(), F->getEntryBlock().begin());
   return TmpB.CreateAlloca(T, nullptr, name);
 }
 
-// ---------- expressions ----------
+// expressions
 
 Value *IntASTnode::codegen() {
   return ConstantInt::get(llvm::Type::getInt32Ty(TheContext), Val, true);
@@ -1725,7 +1724,7 @@ Value *UnaryExprAST::codegen() {
   if (OpTok.type == NOT)
     return Builder.CreateNot(toBool(V, OpTok, "operator '!'"), "nottmp");
 
-  // unary minus, bool promoted to int first as in C
+  // unary minus, bool promoted to int first 
   if (V->getType()->isIntegerTy(1))
     V = widen(V, llvm::Type::getInt32Ty(TheContext), OpTok, "unary '-'");
   if (V->getType()->isFloatTy())
@@ -1735,7 +1734,7 @@ Value *UnaryExprAST::codegen() {
   return LogSemanticError(OpTok, "Type", "invalid operand of type " + typeName(V->getType()) + " to unary '-'");
 }
 
-/// codegenLogical - && and || with short-circuit evaluation
+/// && and || with short-circuit evaluation
 static Value *codegenLogical(const TOKEN &OpTok, ASTnode *Left, ASTnode *Right) {
   bool IsAnd = (OpTok.type == AND);
   std::string Ctx = "operator '" + OpTok.lexeme + "'";
@@ -1784,32 +1783,52 @@ Value *BinaryExprAST::codegen() {
   R = widen(R, T, OpTok, Ctx);
   bool IsFloat = T->isFloatTy();
 
-  switch (OpTok.type) {
+    switch (OpTok.type) {
   case PLUS:
-    return IsFloat ? Builder.CreateFAdd(L, R, "addtmp") : Builder.CreateAdd(L, R, "addtmp");
+    if (IsFloat)
+      return Builder.CreateFAdd(L, R, "addtmp");
+    return Builder.CreateAdd(L, R, "addtmp");
   case MINUS:
-    return IsFloat ? Builder.CreateFSub(L, R, "subtmp") : Builder.CreateSub(L, R, "subtmp");
+    if (IsFloat)
+      return Builder.CreateFSub(L, R, "subtmp");
+    return Builder.CreateSub(L, R, "subtmp");
   case ASTERIX:
-    return IsFloat ? Builder.CreateFMul(L, R, "multmp") : Builder.CreateMul(L, R, "multmp");
+    if (IsFloat)
+      return Builder.CreateFMul(L, R, "multmp");
+    return Builder.CreateMul(L, R, "multmp");
   case DIV:
-    return IsFloat ? Builder.CreateFDiv(L, R, "divtmp") : Builder.CreateSDiv(L, R, "divtmp");
+    if (IsFloat)
+      return Builder.CreateFDiv(L, R, "divtmp");
+    return Builder.CreateSDiv(L, R, "divtmp");
   case MOD:
-    // % only for integers, as in C
+    // only for integers, as in C
     if (IsFloat)
       return LogSemanticError(OpTok, "Type", "operator '%' requires int operands, not float");
     return Builder.CreateSRem(L, R, "modtmp");
   case EQ:
-    return IsFloat ? Builder.CreateFCmpOEQ(L, R, "eqtmp") : Builder.CreateICmpEQ(L, R, "eqtmp");
+    if (IsFloat)
+      return Builder.CreateFCmpUEQ(L, R, "eqtmp");
+    return Builder.CreateICmpEQ(L, R, "eqtmp");
   case NE:
-    return IsFloat ? Builder.CreateFCmpUNE(L, R, "netmp") : Builder.CreateICmpNE(L, R, "netmp");
+    if (IsFloat)
+      return Builder.CreateFCmpUNE(L, R, "netmp");
+    return Builder.CreateICmpNE(L, R, "netmp");
   case LT:
-    return IsFloat ? Builder.CreateFCmpOLT(L, R, "lttmp") : Builder.CreateICmpSLT(L, R, "lttmp");
+    if (IsFloat)
+      return Builder.CreateFCmpULT(L, R, "lttmp");
+    return Builder.CreateICmpSLT(L, R, "lttmp");
   case LE:
-    return IsFloat ? Builder.CreateFCmpOLE(L, R, "letmp") : Builder.CreateICmpSLE(L, R, "letmp");
+    if (IsFloat)
+      return Builder.CreateFCmpULE(L, R, "letmp");
+    return Builder.CreateICmpSLE(L, R, "letmp");
   case GT:
-    return IsFloat ? Builder.CreateFCmpOGT(L, R, "gttmp") : Builder.CreateICmpSGT(L, R, "gttmp");
+    if (IsFloat)
+      return Builder.CreateFCmpUGT(L, R, "gttmp");
+    return Builder.CreateICmpSGT(L, R, "gttmp");
   case GE:
-    return IsFloat ? Builder.CreateFCmpOGE(L, R, "getmp") : Builder.CreateICmpSGE(L, R, "getmp");
+    if (IsFloat)
+      return Builder.CreateFCmpUGE(L, R, "getmp");
+    return Builder.CreateICmpSGE(L, R, "getmp");
   }
   return LogSemanticError(OpTok, "Internal", "unknown binary operator '" + OpTok.lexeme + "'");
 }
@@ -1864,7 +1883,7 @@ Value *ReturnAST::codegen() {
 }
 
 Value *IfExprAST::codegen() {
-  Value *C = toBool(Cond->codegen(), noPos(), "if statement");
+  Value *C = toBool(Cond->codegen(), noPosition), "if statement");
   Function *F = Builder.GetInsertBlock()->getParent();
   BasicBlock *ThenBB = BasicBlock::Create(TheContext, "then", F);
   BasicBlock *ElseBB = Else ? BasicBlock::Create(TheContext, "else", F) : nullptr;
@@ -1896,7 +1915,7 @@ Value *WhileExprAST::codegen() {
 
   // loop header, condition tested every iteration
   Builder.SetInsertPoint(CondBB);
-  Value *C = toBool(Cond->codegen(), noPos(), "while statement");
+  Value *C = toBool(Cond->codegen(), noPosition), "while statement");
   Builder.CreateCondBr(C, BodyBB, EndBB);
 
   Builder.SetInsertPoint(BodyBB);
@@ -2012,26 +2031,18 @@ Value *FunctionDeclAST::codegen() {
   NextBlockIsFunctionBody = true;
   Block->codegen();
 
-  // the last block still needs a terminator
-  BasicBlock *Last = Builder.GetInsertBlock();
-  if (!Last->getTerminator()) {
-    if (Last != Entry && Last->hasNPredecessors(0)) {
-      // block no path reaches, e.g. after if/else that both return
-      Builder.CreateUnreachable();
-    } else if (CurrentReturnType->isVoidTy()) {
+  // every block needs a terminator, therefore a default return
+  if (!blockEnded(Builder.GetInsertBlock())) {
+    if (CurrentReturnType->isVoidTy())
       Builder.CreateRetVoid();
-    } else {
-      // C allows falling off the end, so warn like clang and return zero
-      fprintf(stderr, "Warning: non-void function '%s' can reach the end without a return\n",
-              Proto->getName().c_str());
+    else
       Builder.CreateRet(zeroValue(CurrentReturnType));
-    }
   }
   Scopes.clear();
 
-  // check the generated function is valid
+  // check that the generated function is valid
   if (verifyFunction(*F, &errs()))
-    return LogSemanticError(noPos(), "Internal", "invalid IR generated for function '" + Proto->getName() + "'");
+    return LogSemanticError(noPosition), "Internal", "invalid IR generated for function '" + Proto->getName() + "'");
   return F;
 }
 
