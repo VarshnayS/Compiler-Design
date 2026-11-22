@@ -430,13 +430,17 @@ static TOKEN peekToken() {
   return tok_buffer.front();
 }
 
+/// indent - leading spaces for a node printed at the given tree depth
+static std::string indent(int depth) { return std::string(depth * 2, ' '); }
+
 /// ASTnode - Base class for all AST nodes.
 class ASTnode {
 
 public:
   virtual ~ASTnode() {}
   virtual Value *codegen() { return nullptr; };
-  virtual std::string to_string() const { return ""; };
+  // returns this node and its children as an indented tree, one node per line
+  virtual std::string to_string(int depth = 0) const { return ""; };
 };
 
 /// IntASTnode - Class for integer literals like 1, 2, 10,
@@ -448,6 +452,9 @@ class IntASTnode : public ASTnode {
 public:
   IntASTnode(TOKEN tok, int val) : Val(val), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "IntLiteral " + std::to_string(Val) + "\n";
+  }
 };
 
 /// BoolASTnode - Class for boolean literals true and false,
@@ -458,6 +465,9 @@ class BoolASTnode : public ASTnode {
 public:
   BoolASTnode(TOKEN tok, bool B) : Bool(B), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "BoolLiteral " + (Bool ? "true" : "false") + "\n";
+  }
 };
 
 /// FloatASTnode - Node class for floating point literals like "1.0".
@@ -468,6 +478,10 @@ class FloatASTnode : public ASTnode {
 public:
   FloatASTnode(TOKEN tok, double Val) : Val(Val), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  // print the source spelling so 3.14 shows as 3.14, not 3.140000
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "FloatLiteral " + Tok.lexeme + "\n";
+  }
 };
 
 /// VariableASTnode - Class for referencing a variable (i.e. identifier), like
@@ -487,6 +501,9 @@ public:
   const IDENT_TYPE getVarType() const { return VarType; }
   // getter for token
   const TOKEN &getTok() const { return Tok; }
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "Variable " + Name + "\n";
+  }
 };
 
 /// ParamAST - Class for a parameter declaration
@@ -499,6 +516,9 @@ public:
       : Name(name), Type(type) {}
   const std::string &getName() const { return Name; }
   const std::string &getType() const { return Type; }
+  std::string to_string(int depth) const {
+    return indent(depth) + "Param " + Name + " : " + Type + "\n";
+  }
 };
 
 /// DeclAST - Base class for declarations, variables and functions
@@ -518,6 +538,9 @@ public:
       : Var(std::move(var)), Type(type) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "LocalVarDecl " + Var->getName() + " : " + Type + "\n";
+  }
 };
 
 /// GlobVarDeclAST - Class for a Global variable declaration
@@ -530,6 +553,9 @@ public:
       : Var(std::move(var)), Type(type) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "GlobalVarDecl " + Var->getName() + " : " + Type + "\n";
+  }
 };
 
 /// FunctionPrototypeAST - Class for a function declaration's signature
@@ -547,9 +573,16 @@ public:
   const std::string &getType() const { return Type; }
   int getSize() const { return Params.size(); }
   std::vector<std::unique_ptr<ParamAST>> &getParams() { return Params; }
+  // kind labels the line, e.g. "ExternFunction" or "FunctionPrototype"
+  std::string to_string(int depth, const std::string &kind = "FunctionPrototype") const {
+    std::string s = indent(depth) + kind + " " + Name + " : " + Type + "\n";
+    for (const auto &P : Params)
+      s += P->to_string(depth + 1);
+    return s;
+  }
 };
 
-// Binary expression
+/// BinaryExprAST - Binary expression, e.g. a + b, a && b
 class BinaryExprAST : public ASTnode {
   std::unique_ptr<ASTnode> Left;
   TOKEN OpTok;
@@ -560,9 +593,13 @@ public:
                 std::unique_ptr<ASTnode> right)
       : Left(std::move(left)), OpTok(std::move(opTok)),
         Right(std::move(right)) {}
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "BinaryExpr '" + OpTok.lexeme + "'\n" +
+           Left->to_string(depth + 1) + Right->to_string(depth + 1);
+  }
 };
 
-// unary expression.
+/// UnaryExprAST - Unary expression, e.g. -x, !x
 class UnaryExprAST : public ASTnode {
   TOKEN OpTok;
   std::unique_ptr<ASTnode> Operand;
@@ -570,9 +607,13 @@ class UnaryExprAST : public ASTnode {
 public:
   UnaryExprAST(TOKEN opTok, std::unique_ptr<ASTnode> operand)
       : OpTok(std::move(opTok)), Operand(std::move(operand)) {}
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "UnaryExpr '" + OpTok.lexeme + "'\n" +
+           Operand->to_string(depth + 1);
+  }
 };
 
-/// For assignment
+/// AssignExprAST - Assignment, e.g. x = expr
 class AssignExprAST : public ASTnode {
   std::unique_ptr<VariableASTnode> Var;
   std::unique_ptr<ASTnode> RHS;
@@ -581,6 +622,10 @@ public:
   AssignExprAST(std::unique_ptr<VariableASTnode> var,
                 std::unique_ptr<ASTnode> rhs)
       : Var(std::move(var)), RHS(std::move(rhs)) {}
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "Assign\n" + Var->to_string(depth + 1) +
+           RHS->to_string(depth + 1);
+  }
 };
 
 /// ProgramAST - Root of the AST: externs followed by declarations
@@ -591,7 +636,15 @@ class ProgramAST : public ASTnode {
 public:
   ProgramAST(std::vector<std::unique_ptr<FunctionPrototypeAST>> externs,
              std::vector<std::unique_ptr<ASTnode>> decls)
-      :Externs(std::move(externs)), Decls(std::move(decls)) {}
+      : Externs(std::move(externs)), Decls(std::move(decls)) {}
+  std::string to_string(int depth = 0) const override {
+    std::string s = indent(depth) + "Program\n";
+    for (const auto &E : Externs)
+      s += E->to_string(depth + 1, "ExternFunction");
+    for (const auto &D : Decls)
+      s += D->to_string(depth + 1);
+    return s;
+  }
 };
 
 /// BlockAST - Class for a block with declarations followed by statements
@@ -603,6 +656,14 @@ public:
   BlockAST(std::vector<std::unique_ptr<VarDeclAST>> localDecls,
            std::vector<std::unique_ptr<ASTnode>> stmts)
       : LocalDecls(std::move(localDecls)), Stmts(std::move(stmts)) {}
+  std::string to_string(int depth = 0) const override {
+    std::string s = indent(depth) + "Block\n";
+    for (const auto &D : LocalDecls)
+      s += D->to_string(depth + 1);
+    for (const auto &S : Stmts)
+      s += S->to_string(depth + 1);
+    return s;
+  }
 };
 
 /// FunctionDeclAST - This class represents a function definition itself.
@@ -614,6 +675,10 @@ public:
   FunctionDeclAST(std::unique_ptr<FunctionPrototypeAST> Proto,
                   std::unique_ptr<ASTnode> Block)
       : Proto(std::move(Proto)), Block(std::move(Block)) {}
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "FunctionDecl\n" + Proto->to_string(depth + 1) +
+           Block->to_string(depth + 1);
+  }
 };
 
 /// IfExprAST - Expression class for if/then/else.
@@ -624,7 +689,15 @@ public:
   IfExprAST(std::unique_ptr<ASTnode> Cond, std::unique_ptr<ASTnode> Then,
             std::unique_ptr<ASTnode> Else)
       : Cond(std::move(Cond)), Then(std::move(Then)), Else(std::move(Else)) {}
-
+  std::string to_string(int depth = 0) const override {
+    std::string s = indent(depth) + "If\n";
+    s += indent(depth + 1) + "Condition\n" + Cond->to_string(depth + 2);
+    s += indent(depth + 1) + "Then\n" + Then->to_string(depth + 2);
+    // else branch is optional
+    if (Else)
+      s += indent(depth + 1) + "Else\n" + Else->to_string(depth + 2);
+    return s;
+  }
 };
 
 /// WhileExprAST - Expression class for while.
@@ -634,7 +707,11 @@ class WhileExprAST : public ASTnode {
 public:
   WhileExprAST(std::unique_ptr<ASTnode> cond, std::unique_ptr<ASTnode> body)
       : Cond(std::move(cond)), Body(std::move(body)) {}
-
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "While\n" + indent(depth + 1) + "Condition\n" +
+           Cond->to_string(depth + 2) + indent(depth + 1) + "Body\n" +
+           Body->to_string(depth + 2);
+  }
 };
 
 /// ReturnAST - Class for a return value
@@ -643,10 +720,13 @@ class ReturnAST : public ASTnode {
 
 public:
   ReturnAST(std::unique_ptr<ASTnode> value) : Val(std::move(value)) {}
-
+  // return value is optional: "return;" has none
+  std::string to_string(int depth = 0) const override {
+    return indent(depth) + "Return\n" + (Val ? Val->to_string(depth + 1) : "");
+  }
 };
 
-/// ArgsAST - Class for a function argumetn in a function call
+/// ArgsAST - Class for a function call and its arguments
 class ArgsAST : public ASTnode {
   std::string Callee;
   std::vector<std::unique_ptr<ASTnode>> ArgsList;
@@ -654,8 +734,19 @@ class ArgsAST : public ASTnode {
 public:
   ArgsAST(const std::string &Callee, std::vector<std::unique_ptr<ASTnode>> list)
       : Callee(Callee), ArgsList(std::move(list)) {}
-
+  std::string to_string(int depth = 0) const override {
+    std::string s = indent(depth) + "Call " + Callee + "\n";
+    for (const auto &A : ArgsList)
+      s += A->to_string(depth + 1);
+    return s;
+  }
 };
+
+/// operator<< - lets an AST node be printed with llvm::outs() << node
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const ASTnode &ast) {
+  os << ast.to_string();
+  return os;
+}
 
 /// LogError* - These are little helper function for error handling.
 std::unique_ptr<ASTnode> LogError(TOKEN tok, const char *Str) {
@@ -1493,6 +1584,8 @@ int main(int argc, char **argv) {
   /* UNCOMMENT : Task 2 - Parser */
    auto Root = parser();
    fprintf(stderr, "Parsing Finished\n");  
+   // print the whole AST to stdout
+  llvm::outs() << *Root << "\n";
 
   printf(
       "********************* FINAL IR (begin) ****************************\n");
