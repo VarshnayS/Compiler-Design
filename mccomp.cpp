@@ -1582,9 +1582,9 @@ int main(int argc, char **argv) {
   // Run the parser now.
 
   /* UNCOMMENT : Task 2 - Parser */
-   auto Root = parser();
-   fprintf(stderr, "Parsing Finished\n");  
-   // print the whole AST to stdout
+  auto Root = parser();
+  fprintf(stderr, "Parsing Finished\n");  
+  // print the whole AST to stdout
   llvm::outs() << *Root << "\n";
 
   printf(
