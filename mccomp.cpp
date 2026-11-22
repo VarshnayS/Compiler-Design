@@ -440,6 +440,14 @@ static void putBackToken(TOKEN tok) { tok_buffer.push_front(tok); }
 /// indent - leading spaces for a node printed at the given tree depth
 static std::string astIndent(int depth) { return std::string(depth * 2, ' '); }
 
+///prints the dimensions of the array as text
+static std::string dimsString(const std::vector<int> &dimensions) {
+  std::string s;
+  for (int d : dimensions)
+    s += "[" + std::to_string(d) + "]";
+  return s;
+}
+
 // ASTnode - the base class for all AST nodes
 class ASTnode {
 
@@ -519,18 +527,37 @@ public:
   }
 };
 
+
+/// array element access
+class ArrayAccessAST : public VariableASTnode {
+  std::vector<std::unique_ptr<ASTnode>> Indices;
+
+public:
+  ArrayAccessAST(TOKEN tok, const std::string &Name, std::vector<std::unique_ptr<ASTnode>> indices)
+      : VariableASTnode(tok, Name), Indices(std::move(indices)) {}
+  std::string to_string(int depth = 0) const override {
+    std::string s = astIndent(depth) + "ArrayAccess " + Name + "\n";
+    for (const auto &I : Indices)
+      s += astIndent(depth + 1) + "Index\n" + I->to_string(depth + 2);
+    return s;
+  }
+};
+
 /// ParamAST - Class for a parameter declaration
 class ParamAST {
   std::string Name;
   std::string Type;
+  // array sizes
+  std::vector<int> dimensions;
 
 public:
-  ParamAST(const std::string &name, const std::string &type)
-      : Name(name), Type(type) {}
+  ParamAST(const std::string &name, const std::string &type, std::vector<int> dims = {})
+      : Name(name), Type(type), dimensions(std::move(dims)) {}
   const std::string &getName() const { return Name; }
   const std::string &getType() const { return Type; }
+  const std::vector<int> &getDimensions() const { return dimensions; }
   std::string to_string(int depth) const {
-    return astIndent(depth) + "Param " + Name + " : " + Type + "\n";
+    return astIndent(depth) + "Param " + Name + " : " + Type + dimsString(dimensions) + "\n";
   }
 };
 
@@ -541,19 +568,19 @@ public:
   virtual ~DeclAST() {}
 };
 
-/// VarDeclAST - Class for a variable declaration
 class VarDeclAST : public DeclAST {
   std::unique_ptr<VariableASTnode> Var;
   std::string Type;
+  std::vector<int> dimensions;
 
 public:
-  VarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type)
-      : Var(std::move(var)), Type(type) {}
+  VarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type, std::vector<int> dims = {})
+      : Var(std::move(var)), Type(type), dimensions(std::move(dims)) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
   Value *codegen() override;
   std::string to_string(int depth = 0) const override {
-    return astIndent(depth) + "LocalVarDecl " + Var->getName() + " : " + Type + "\n";
+    return astIndent(depth) + "LocalVarDecl " + Var->getName() + " : " + Type + dimsString(dimensions) + "\n";
   }
 };
 
@@ -561,15 +588,16 @@ public:
 class GlobVarDeclAST : public DeclAST {
   std::unique_ptr<VariableASTnode> Var;
   std::string Type;
+  std::vector<int> dimensions;
 
 public:
-  GlobVarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type)
-      : Var(std::move(var)), Type(type) {}
+  GlobVarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type, std::vector<int> dims = {})
+      : Var(std::move(var)), Type(type), dimensions(std::move(dims)) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
   Value *codegen() override;
   std::string to_string(int depth = 0) const override {
-    return astIndent(depth) + "GlobalVarDecl " + Var->getName() + " : " + Type + "\n";
+    return astIndent(depth) + "GlobalVarDecl " + Var->getName() + " : " + Type + dimsString(dimensions) + "\n";
   }
 };
 
@@ -1487,8 +1515,7 @@ static std::unique_ptr<FunctionPrototypeAST> ParseExtern() {
   if (CurTok.type == EXTERN) {
     getNextToken(); // eat the EXTERN
 
-    if (CurTok.type == VOID_TOK || CurTok.type == INT_TOK ||
-        CurTok.type == FLOAT_TOK || CurTok.type == BOOL_TOK) {
+    if (CurTok.type == VOID_TOK || CurTok.type == INT_TOK || CurTok.type == FLOAT_TOK || CurTok.type == BOOL_TOK) {
 
       PrevTok = CurTok; // to keep track of the type token
       getNextToken();   // eat the VOID_TOK, INT_TOK, BOOL_TOK or FLOAT_TOK
@@ -1517,12 +1544,9 @@ static std::unique_ptr<FunctionPrototypeAST> ParseExtern() {
                 ident->getTok(), IdName, PrevTok.lexeme, std::move(P));
             return Proto;
           } else
-            return LogErrorP(
-                CurTok,
-                "expected ';' after extern declaration");
+            return LogErrorP(CurTok, "expected ';' after the extern declration");
         } else
-          return LogErrorP(CurTok,
-                           "expected '(' after extern function name");
+          return LogErrorP(CurTok, "expected '(' after extern function name");
       } else
         return LogErrorP(CurTok, "expected a function name in extern declaration");
 
