@@ -167,6 +167,13 @@ static TOKEN returnTok(std::string lexVal, int tok_type) {
   return return_tok;
 }
 
+/// LogLexicalError - report an invalid character and stop
+static TOKEN LogLexicalError(TOKEN tok, const std::string &msg) {
+  fprintf(stderr, "%d:%d Lexical error: %s\n", tok.lineNo, tok.columnNo, msg.c_str());
+  exit(2);
+  return tok;
+}
+
 // Read file line by line -- or look for \n and if found add 1 to line number
 // and reset column number to 0
 /// gettok - Return the next token from standard input.
@@ -314,7 +321,8 @@ static TOKEN gettok() {
     } else {
       LastChar = NextChar;
       columnNo++;
-      return returnTok("&", int('&'));
+      // a single '&' is not a MiniC token
+      return LogLexicalError(returnTok("&", INVALID), "invalid character '&', did you mean '&&'?");
     }
   }
 
@@ -327,7 +335,8 @@ static TOKEN gettok() {
     } else {
       LastChar = NextChar;
       columnNo++;
-      return returnTok("|", int('|'));
+      // a single '|' is not a MiniC token
+      return LogLexicalError(returnTok("|", INVALID), "invalid character '|', did you mean '||'?");
     }
   }
 
@@ -397,6 +406,9 @@ static TOKEN gettok() {
   std::string s(1, ThisChar);
   LastChar = getc(pFile);
   columnNo++;
+  // the only single characters left that are MiniC tokens
+  if (std::string("+-*%[]").find((char)ThisChar) == std::string::npos)
+    return LogLexicalError(returnTok(s, INVALID), "invalid character '" + s + "'");
   return returnTok(s, int(ThisChar));
 }
 
@@ -433,17 +445,17 @@ static TOKEN peekToken() {
 /// indent - leading spaces for a node printed at the given tree depth
 static std::string astIndent(int depth) { return std::string(depth * 2, ' '); }
 
-/// ASTnode - Base class for all AST nodes.
+// ASTnode - the base class for all AST nodes
 class ASTnode {
 
 public:
   virtual ~ASTnode() {}
   virtual Value *codegen() { return nullptr; };
-  // returns this node and its children as an indented tree, one node per line
+  // returns this node and its children as an indented tree - one node per line
   virtual std::string to_string(int depth = 0) const { return ""; };
 };
 
-/// IntASTnode - Class for integer literals like 1, 2, 10,
+// a class for integer literals
 class IntASTnode : public ASTnode {
   int Val;
   TOKEN Tok;
@@ -452,12 +464,13 @@ class IntASTnode : public ASTnode {
 public:
   IntASTnode(TOKEN tok, int val) : Val(val), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "IntLiteral " + std::to_string(Val) + "\n";
   }
 };
 
-/// BoolASTnode - Class for boolean literals true and false,
+/// class for bools
 class BoolASTnode : public ASTnode {
   bool Bool;
   TOKEN Tok;
@@ -465,12 +478,13 @@ class BoolASTnode : public ASTnode {
 public:
   BoolASTnode(TOKEN tok, bool B) : Bool(B), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "BoolLiteral " + (Bool ? "true" : "false") + "\n";
   }
 };
 
-/// FloatASTnode - Node class for floating point literals like "1.0".
+/// The node class for floating point literals eg "1.0"
 class FloatASTnode : public ASTnode {
   double Val;
   TOKEN Tok;
@@ -478,14 +492,14 @@ class FloatASTnode : public ASTnode {
 public:
   FloatASTnode(TOKEN tok, double Val) : Val(Val), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
-  // print the source spelling so 3.14 shows as 3.14, not 3.140000
+  Value *codegen() override;
+  // print the source spelling so 3.14 doesn't show as 3.140000
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "FloatLiteral " + Tok.lexeme + "\n";
   }
 };
 
-/// VariableASTnode - Class for referencing a variable (i.e. identifier), like
-/// "a".
+// the class for referencing a variable (i.e. identifier)
 enum IDENT_TYPE { IDENTIFIER = 0 };
 class VariableASTnode : public ASTnode {
 protected:
@@ -501,6 +515,7 @@ public:
   const IDENT_TYPE getVarType() const { return VarType; }
   // getter for token
   const TOKEN &getTok() const { return Tok; }
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "Variable " + Name + "\n";
   }
@@ -538,6 +553,7 @@ public:
       : Var(std::move(var)), Type(type) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "LocalVarDecl " + Var->getName() + " : " + Type + "\n";
   }
@@ -553,6 +569,7 @@ public:
       : Var(std::move(var)), Type(type) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "GlobalVarDecl " + Var->getName() + " : " + Type + "\n";
   }
@@ -560,19 +577,23 @@ public:
 
 /// FunctionPrototypeAST - Class for a function declaration's signature
 class FunctionPrototypeAST {
+  // name token for error positions
+  TOKEN Tok;
   std::string Name;
   std::string Type;
   std::vector<std::unique_ptr<ParamAST>> Params; // vector of parameters
 
 public:
-  FunctionPrototypeAST(const std::string &name, const std::string &type,
+  FunctionPrototypeAST(TOKEN tok, const std::string &name, const std::string &type,
                        std::vector<std::unique_ptr<ParamAST>> params)
-      : Name(name), Type(type), Params(std::move(params)) {}
+      : Tok(std::move(tok)), Name(name), Type(type), Params(std::move(params)) {}
 
   const std::string &getName() const { return Name; }
   const std::string &getType() const { return Type; }
+  const TOKEN &getTok() const { return Tok; }
   int getSize() const { return Params.size(); }
   std::vector<std::unique_ptr<ParamAST>> &getParams() { return Params; }
+  Function *codegen();
   // kind labels the line, e.g. "ExternFunction" or "FunctionPrototype"
   std::string to_string(int depth, const std::string &kind = "FunctionPrototype") const {
     std::string s = astIndent(depth) + kind + " " + Name + " : " + Type + "\n";
@@ -582,7 +603,7 @@ public:
   }
 };
 
-/// BinaryExprAST - Binary expression, e.g. a + b, a && b
+/// Binary expression, e.g. a + b, a && b
 class BinaryExprAST : public ASTnode {
   std::unique_ptr<ASTnode> Left;
   TOKEN OpTok;
@@ -593,13 +614,14 @@ public:
                 std::unique_ptr<ASTnode> right)
       : Left(std::move(left)), OpTok(std::move(opTok)),
         Right(std::move(right)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "BinaryExpr '" + OpTok.lexeme + "'\n" +
            Left->to_string(depth + 1) + Right->to_string(depth + 1);
   }
 };
 
-/// UnaryExprAST - Unary expression, e.g. -x, !x
+/// Unary expression, eg !x
 class UnaryExprAST : public ASTnode {
   TOKEN OpTok;
   std::unique_ptr<ASTnode> Operand;
@@ -607,13 +629,13 @@ class UnaryExprAST : public ASTnode {
 public:
   UnaryExprAST(TOKEN opTok, std::unique_ptr<ASTnode> operand)
       : OpTok(std::move(opTok)), Operand(std::move(operand)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
-    return astIndent(depth) + "UnaryExpr '" + OpTok.lexeme + "'\n" +
-           Operand->to_string(depth + 1);
+    return astIndent(depth) + "UnaryExpr '" + OpTok.lexeme + "'\n" + Operand->to_string(depth + 1);
   }
 };
 
-/// AssignExprAST - Assignment, e.g. x = expr
+/// Assignment
 class AssignExprAST : public ASTnode {
   std::unique_ptr<VariableASTnode> Var;
   std::unique_ptr<ASTnode> RHS;
@@ -622,9 +644,9 @@ public:
   AssignExprAST(std::unique_ptr<VariableASTnode> var,
                 std::unique_ptr<ASTnode> rhs)
       : Var(std::move(var)), RHS(std::move(rhs)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
-    return astIndent(depth) + "Assign\n" + Var->to_string(depth + 1) +
-           RHS->to_string(depth + 1);
+    return astIndent(depth) + "Assign\n" + Var->to_string(depth + 1) + RHS->to_string(depth + 1);
   }
 };
 
@@ -637,6 +659,7 @@ public:
   ProgramAST(std::vector<std::unique_ptr<FunctionPrototypeAST>> externs,
              std::vector<std::unique_ptr<ASTnode>> decls)
       : Externs(std::move(externs)), Decls(std::move(decls)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     std::string s = astIndent(depth) + "Program\n";
     for (const auto &E : Externs)
@@ -656,6 +679,7 @@ public:
   BlockAST(std::vector<std::unique_ptr<VarDeclAST>> localDecls,
            std::vector<std::unique_ptr<ASTnode>> stmts)
       : LocalDecls(std::move(localDecls)), Stmts(std::move(stmts)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     std::string s = astIndent(depth) + "Block\n";
     for (const auto &D : LocalDecls)
@@ -675,9 +699,9 @@ public:
   FunctionDeclAST(std::unique_ptr<FunctionPrototypeAST> Proto,
                   std::unique_ptr<ASTnode> Block)
       : Proto(std::move(Proto)), Block(std::move(Block)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
-    return astIndent(depth) + "FunctionDecl\n" + Proto->to_string(depth + 1) +
-           Block->to_string(depth + 1);
+    return astIndent(depth) + "FunctionDecl\n" + Proto->to_string(depth + 1) + Block->to_string(depth + 1);
   }
 };
 
@@ -689,6 +713,7 @@ public:
   IfExprAST(std::unique_ptr<ASTnode> Cond, std::unique_ptr<ASTnode> Then,
             std::unique_ptr<ASTnode> Else)
       : Cond(std::move(Cond)), Then(std::move(Then)), Else(std::move(Else)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     std::string s = astIndent(depth) + "If\n";
     s += astIndent(depth + 1) + "Condition\n" + Cond->to_string(depth + 2);
@@ -707,19 +732,23 @@ class WhileExprAST : public ASTnode {
 public:
   WhileExprAST(std::unique_ptr<ASTnode> cond, std::unique_ptr<ASTnode> body)
       : Cond(std::move(cond)), Body(std::move(body)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "While\n" + astIndent(depth + 1) + "Condition\n" +
-           Cond->to_string(depth + 2) + astIndent(depth + 1) + "Body\n" +
-           Body->to_string(depth + 2);
+           Cond->to_string(depth + 2) + astIndent(depth + 1) + "Body\n" + Body->to_string(depth + 2);
   }
 };
 
 /// ReturnAST - Class for a return value
 class ReturnAST : public ASTnode {
+  // return token for error positions
+  TOKEN RetTok;
   std::unique_ptr<ASTnode> Val;
 
 public:
-  ReturnAST(std::unique_ptr<ASTnode> value) : Val(std::move(value)) {}
+  ReturnAST(TOKEN retTok, std::unique_ptr<ASTnode> value)
+      : RetTok(std::move(retTok)), Val(std::move(value)) {}
+  Value *codegen() override;
   // return value is optional: "return;" has none
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "Return\n" + (Val ? Val->to_string(depth + 1) : "");
@@ -728,12 +757,16 @@ public:
 
 /// ArgsAST - Class for a function call and its arguments
 class ArgsAST : public ASTnode {
+  // callee token for error positions
+  TOKEN Tok;
   std::string Callee;
   std::vector<std::unique_ptr<ASTnode>> ArgsList;
 
 public:
-  ArgsAST(const std::string &Callee, std::vector<std::unique_ptr<ASTnode>> list)
-      : Callee(Callee), ArgsList(std::move(list)) {}
+  ArgsAST(TOKEN tok, const std::string &Callee,
+          std::vector<std::unique_ptr<ASTnode>> list)
+      : Tok(std::move(tok)), Callee(Callee), ArgsList(std::move(list)) {}
+  Value *codegen() override;
   std::string to_string(int depth = 0) const override {
     std::string s = astIndent(depth) + "Call " + Callee + "\n";
     for (const auto &A : ArgsList)
@@ -742,15 +775,16 @@ public:
   }
 };
 
-/// operator<< - lets an AST node be printed with llvm::outs() << node
+/// lets an AST node be printed with llvm::outs() << node
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const ASTnode &ast) {
   os << ast.to_string();
   return os;
 }
 
+
 /// LogError* - These are little helper function for error handling.
 std::unique_ptr<ASTnode> LogError(TOKEN tok, const char *Str) {
-  fprintf(stderr, "%d:%d Error: %s\n", tok.lineNo, tok.columnNo, Str);
+  fprintf(stderr, "%d:%d Syntax error: %s\n", tok.lineNo, tok.columnNo, Str);
   exit(2);
   return nullptr;
 }
@@ -762,7 +796,7 @@ std::unique_ptr<FunctionPrototypeAST> LogErrorP(TOKEN tok, const char *Str) {
 }
 
 std::unique_ptr<ASTnode> LogError(const char *Str) {
-  fprintf(stderr, "Error: %s\n", Str);
+  fprintf(stderr, "Syntax error: %s\n", Str);
   exit(2);
   return nullptr;
 }
@@ -941,7 +975,7 @@ static std::unique_ptr<ASTnode> ParsePrimary() {
       auto Args = ParseArgs();
        // eat ')'
       getNextToken();
-      return std::make_unique<ArgsAST>(IdTok.lexeme, std::move(Args));
+      return std::make_unique<ArgsAST>(IdTok, IdTok.lexeme, std::move(Args));
     }
     // identifier_tail ::= ε
     return std::make_unique<VariableASTnode>(IdTok, IdTok.lexeme);
@@ -1108,11 +1142,11 @@ static std::unique_ptr<ASTnode> ParseIfStmt() {
     if (!Cond)
       return nullptr;
     if (CurTok.type != RPAR)
-      return LogError(CurTok, "expected )");
+      return LogError(CurTok, "expected ')' after if condition");
     getNextToken(); // eat )
 
     if (!(CurTok.type == LBRA)) {
-      return LogError(CurTok, "expected { to start then block of if statment");
+      return LogError(CurTok, "expected '{' to start the if block");
     }
 
     auto Then = ParseBlock();
@@ -1122,35 +1156,35 @@ static std::unique_ptr<ASTnode> ParseIfStmt() {
     return std::make_unique<IfExprAST>(std::move(Cond), std::move(Then), std::move(Else));
 
   } else
-    return LogError(CurTok, "expected (");
+    return LogError(CurTok, "expected '(' after 'if'");
 
   return nullptr;
 }
 
-// return_stmt ::= "return" ";" | "return" expr ";"
+// return_stmt ::= "return" return_tail
+// return_tail ::= ";" | expr ";"
 static std::unique_ptr<ASTnode> ParseReturnStmt() {
-  // eat the return
-  getNextToken(); 
+  // keep the return token for error positions
+  TOKEN RetTok = CurTok;
+  // eat 'return'
+  getNextToken();
+
   if (CurTok.type == SC) {
-    // eat the ;
-    getNextToken(); 
-    // return a null value
-    return std::make_unique<ReturnAST>(std::move(nullptr));
-    // FIRST(expr)
-  } else if (isFirstOfExpr(CurTok.type)) {
-    auto val = ParseExper();
-    if (!val)
-      return nullptr;
-
-    if (CurTok.type == SC) {
-      getNextToken(); 
-      return std::make_unique<ReturnAST>(std::move(val));
-    } else
-      return LogError(CurTok, "expected ';'");
-  } else
-    return LogError(CurTok, "expected ';' or expression");
-
-  return nullptr;
+    // eat ';'
+    getNextToken();
+    // return with no value
+    return std::make_unique<ReturnAST>(RetTok, nullptr);
+  }
+  // FIRST(expr)
+  if (isFirstOfExpr(CurTok.type)) {
+    auto Val = ParseExper();
+    if (CurTok.type != SC)
+      return LogError(CurTok, "expected a ';' after return value");
+    // eat ';'
+    getNextToken();
+    return std::make_unique<ReturnAST>(RetTok, std::move(Val));
+  }
+  return LogError(CurTok, "expected a ';' or an expression after 'return'");
 }
 
 // while_stmt ::= "while" "(" expr ")" stmt
@@ -1164,16 +1198,18 @@ static std::unique_ptr<ASTnode> ParseWhileStmt() {
     if (!Cond)
       return nullptr;
     if (CurTok.type != RPAR)
-      return LogError(CurTok, "expected )");
+      return LogError(CurTok, "expected ')' after while condition");
     getNextToken(); // eat )
 
     auto Body = ParseStmt();
+    // an empty statement ';' as the body becomes an empty block
     if (!Body)
-      return nullptr;
+      Body = std::make_unique<BlockAST>(std::vector<std::unique_ptr<VarDeclAST>>(),
+                                        std::vector<std::unique_ptr<ASTnode>>());
 
     return std::make_unique<WhileExprAST>(std::move(Cond), std::move(Body));
   } else
-    return LogError(CurTok, "expected (");
+    return LogError(CurTok, "expected '(' after 'while'");
 }
 
 // stmt ::= expr_stmt|  block| if_stmt| while_stmt| return_stmt
@@ -1183,30 +1219,25 @@ static std::unique_ptr<ASTnode> ParseStmt() {
   if (isFirstOfExpr(CurTok.type) || CurTok.type == SC) {
     // expand by stmt ::= expr_stmt
     auto expr_stmt = ParseExperStmt();
-    fprintf(stderr, "Parsed an expression statement\n");
     return expr_stmt;
   } else if (CurTok.type == LBRA) { // FIRST(block)
     auto block_stmt = ParseBlock();
     if (block_stmt) {
-      fprintf(stderr, "Parsed a block\n");
       return block_stmt;
     }
   } else if (CurTok.type == IF) { // FIRST(if_stmt)
     auto if_stmt = ParseIfStmt();
     if (if_stmt) {
-      fprintf(stderr, "Parsed an if statment\n");
       return if_stmt;
     }
   } else if (CurTok.type == WHILE) { // FIRST(while_stmt)
     auto while_stmt = ParseWhileStmt();
     if (while_stmt) {
-      fprintf(stderr, "Parsed a while statment\n");
       return while_stmt;
     }
   } else if (CurTok.type == RETURN) { // FIRST(return_stmt)
     auto return_stmt = ParseReturnStmt();
     if (return_stmt) {
-      fprintf(stderr, "Parsed a return statment\n");
       return return_stmt;
     }
   }
@@ -1270,6 +1301,8 @@ static std::vector<std::unique_ptr<VarDeclAST>> ParseLocalDeclsPrime() {
     } else if (isFirstOfStmt(CurTok.type) ||
              CurTok.type == RBRA) { // FOLLOW(local_decls)
     // expand by local_decls ::= ε
+  } else if (CurTok.type == VOID_TOK) {
+    LogError(CurTok, "variables cannot have type 'void'");
   } else {
     LogError(CurTok, "expected a declaration, a statement or '}'");
   }
@@ -1299,13 +1332,12 @@ static std::unique_ptr<VarDeclAST> ParseLocalDecl() {
 
       getNextToken(); // eat 'IDENT'
       if (CurTok.type != SC) {
-        LogError(CurTok, "Expected ';' to end local variable declaration");
+        LogError(CurTok, "expected ';' to end local variable declaration");
         return nullptr;
       }
       getNextToken(); // eat ';'
-      fprintf(stderr, "Parsed a local variable declaration\n");
     } else {
-      LogError(CurTok, "expected identifier' in local variable declaration");
+      LogError(CurTok, "expected a variable name in local variable declaration");
       return nullptr;
     }
   }
@@ -1331,6 +1363,8 @@ static std::vector<std::unique_ptr<VarDeclAST>> ParseLocalDecls() {
   // FOLLOW(local_decls)
   } else if (isFirstOfStmt(CurTok.type) || CurTok.type == RBRA) { 
     // expand by local_decls ::= epsilon
+  } else if (CurTok.type == VOID_TOK) {
+    LogError(CurTok, "variables cannot have type 'void'");
   } else {
     LogError(CurTok, "expected a declaration, a statement or '}'");
   }
@@ -1347,13 +1381,11 @@ static std::unique_ptr<ASTnode> ParseBlock() {
   getNextToken(); // eat '{'
 
   local_decls = ParseLocalDecls();
-  fprintf(stderr, "Parsed a set of local variable declaration\n");
   stmt_list = ParseStmtList();
-  fprintf(stderr, "Parsed a list of statements\n");
   if (CurTok.type == RBRA)
     getNextToken(); // eat '}'
   else {            // syntax error
-    LogError(CurTok, "expected '}' , close body of block");
+    LogError(CurTok, "expected '}' to close the block");
     return nullptr;
   }
 
@@ -1383,14 +1415,13 @@ static std::unique_ptr<ASTnode> ParseDecl() {
       if (CurTok.type ==
           SC) {         // found ';' then this is a global variable declaration.
         getNextToken(); // eat ;
-        fprintf(stderr, "Parsed a variable declaration\n");
 
         if (PrevTok.type != VOID_TOK)
           return std::make_unique<GlobVarDeclAST>(std::move(ident),
                                                   PrevTok.lexeme);
         else
           return LogError(PrevTok,
-                          "Cannot have variable declaration with type 'void'");
+                          "variables cannot have type 'void'");
       } else if (CurTok.type ==
                  LPAR) { // found '(' then this is a function declaration.
         getNextToken();  // eat (
@@ -1398,7 +1429,6 @@ static std::unique_ptr<ASTnode> ParseDecl() {
         auto P =
             ParseParams(); // parse the parameters, returns a vector of params
         // if (P.size() == 0) return nullptr;
-        fprintf(stderr, "Parsed parameter list for function\n");
 
         if (CurTok.type != RPAR) // syntax error
           return LogError(CurTok, "expected ')' in function declaration");
@@ -1411,27 +1441,24 @@ static std::unique_ptr<ASTnode> ParseDecl() {
         auto B = ParseBlock(); // parse the function body
         if (!B)
           return nullptr;
-        else
-          fprintf(stderr, "Parsed block of statements in function\n");
 
         // now create a Function prototype
         // create a Function body
         // put these to together
         // and return a std::unique_ptr<FunctionDeclAST>
-        fprintf(stderr, "Parsed a function declaration\n");
 
         auto Proto = std::make_unique<FunctionPrototypeAST>(
-            IdName, PrevTok.lexeme, std::move(P));
+            ident->getTok(), IdName, PrevTok.lexeme, std::move(P));
         return std::make_unique<FunctionDeclAST>(std::move(Proto),
                                                  std::move(B));
       } else
-        return LogError(CurTok, "expected ';' or ('");
+        return LogError(CurTok, "expected ';' or '(' after the declared name");
     } else
-      return LogError(CurTok, "expected an identifier");
+      return LogError(CurTok, "expected a name after the type");
 
   } else
     LogError(CurTok,
-             "expected 'void', 'int' or 'float' or EOF token"); // syntax error
+             "expected a declaration ('void', 'int', 'float' or 'bool')"); // syntax error
 
   return nullptr;
 }
@@ -1479,31 +1506,30 @@ static std::unique_ptr<FunctionPrototypeAST> ParseExtern() {
 
           auto P =
               ParseParams(); // parse the parameters, returns a vector of params
-              fprintf(stderr, "Parsed parameter list for external function\n");
 
           if (CurTok.type != RPAR) // syntax error
             return LogErrorP(
-                CurTok, "expected ')' in closing extern function declaration");
+                CurTok, "expected ')' to close the extern parameter list");
 
           getNextToken(); // eat )
 
           if (CurTok.type == SC) {
             getNextToken(); // eat ";"
             auto Proto = std::make_unique<FunctionPrototypeAST>(
-                IdName, PrevTok.lexeme, std::move(P));
+                ident->getTok(), IdName, PrevTok.lexeme, std::move(P));
             return Proto;
           } else
             return LogErrorP(
                 CurTok,
-                "expected ;' in ending extern function declaration statement");
+                "expected ';' after extern declaration");
         } else
           return LogErrorP(CurTok,
-                           "expected (' in extern function declaration");
-      }
+                           "expected '(' after extern function name");
+      } else
+        return LogErrorP(CurTok, "expected a function name in extern declaration");
 
     } else
-      LogErrorP(CurTok, "expected 'void', 'int' or 'float' in extern function "
-                        "declaration\n"); // syntax error
+      LogErrorP(CurTok, "expected 'void', 'int', 'float' or 'bool' after 'extern'"); // syntax error
   }
 
   return nullptr;
@@ -1547,6 +1573,476 @@ static LLVMContext TheContext;
 static IRBuilder<> Builder(TheContext);
 static std::unique_ptr<Module> TheModule;
 
+// local variable scopes, innermost scope at the back
+static std::vector<std::map<std::string, AllocaInst *>> Scopes;
+// global variables by name
+static std::map<std::string, GlobalVariable *> GlobalNamedValues;
+// return type of the function being generated
+static llvm::Type *CurrentReturnType = nullptr;
+// set so a function body shares the parameters' scope
+static bool NextBlockIsFunctionBody = false;
+
+/// noPos - token with no source position
+static TOKEN noPos() {
+  TOKEN t;
+  t.lineNo = 0;
+  t.columnNo = 0;
+  return t;
+}
+
+/// LogSemanticError - report a semantic error of the given kind (e.g. Type, Scope) and stop
+static Value *LogSemanticError(const TOKEN &tok, const std::string &kind, const std::string &msg) {
+  if (tok.lineNo > 0)
+    fprintf(stderr, "%d:%d %s error: %s\n", tok.lineNo, tok.columnNo, kind.c_str(), msg.c_str());
+  else
+    fprintf(stderr, "%s error: %s\n", kind.c_str(), msg.c_str());
+  exit(2);
+  return nullptr;
+}
+
+/// getLLVMType - MiniC type name to LLVM type
+static llvm::Type *getLLVMType(const std::string &name) {
+  if (name == "int")
+    return llvm::Type::getInt32Ty(TheContext);
+  if (name == "float")
+    return llvm::Type::getFloatTy(TheContext);
+  if (name == "bool")
+    return llvm::Type::getInt1Ty(TheContext);
+  return llvm::Type::getVoidTy(TheContext);
+}
+
+/// typeName - MiniC name of an LLVM type, for error messages
+static std::string typeName(llvm::Type *T) {
+  if (T->isIntegerTy(1))
+    return "bool";
+  if (T->isIntegerTy(32))
+    return "int";
+  if (T->isFloatTy())
+    return "float";
+  if (T->isVoidTy())
+    return "void";
+  return "unknown";
+}
+
+/// typeRank - orders bool < int < float to find the wider type
+static int typeRank(llvm::Type *T) {
+  if (T->isIntegerTy(1))
+    return 1;
+  if (T->isIntegerTy(32))
+    return 2;
+  if (T->isFloatTy())
+    return 3;
+  return 0;
+}
+
+/// zeroValue - zero constant of a type, used to initialise variables
+static Constant *zeroValue(llvm::Type *T) {
+  if (T->isFloatTy())
+    return ConstantFP::get(T, 0.0);
+  return ConstantInt::get(T, 0);
+}
+
+/// widen - convert V to type T if widening, otherwise a semantic error
+static Value *widen(Value *V, llvm::Type *T, const TOKEN &tok, const std::string &context) {
+  llvm::Type *From = V->getType();
+  if (From == T)
+    return V;
+  if (From->isVoidTy())
+    return LogSemanticError(tok, "Type", "void value used in " + context);
+  // bool to int, true becomes 1
+  if (From->isIntegerTy(1) && T->isIntegerTy(32))
+    return Builder.CreateZExt(V, T, "booltoint");
+  // bool to float
+  if (From->isIntegerTy(1) && T->isFloatTy())
+    return Builder.CreateUIToFP(V, T, "booltofloat");
+  // int to float
+  if (From->isIntegerTy(32) && T->isFloatTy())
+    return Builder.CreateSIToFP(V, T, "inttofloat");
+  return LogSemanticError(tok, "Type", "narrowing conversion from " + typeName(From) +
+                                   " to " + typeName(T) + " in " + context +
+                                   " is not allowed");
+}
+
+/// toBool - any scalar to bool by comparing with zero, as in C
+static Value *toBool(Value *V, const TOKEN &tok, const std::string &context) {
+  llvm::Type *T = V->getType();
+  if (T->isIntegerTy(1))
+    return V;
+  if (T->isIntegerTy(32))
+    return Builder.CreateICmpNE(V, ConstantInt::get(T, 0), "tobool");
+  if (T->isFloatTy())
+    return Builder.CreateFCmpUNE(V, ConstantFP::get(T, 0.0), "tobool");
+  return LogSemanticError(tok, "Type", "void value used as a condition in " + context);
+}
+
+/// lookupVariable - innermost scope first, then globals
+static Value *lookupVariable(const std::string &name, llvm::Type *&type) {
+  for (auto it = Scopes.rbegin(); it != Scopes.rend(); ++it) {
+    auto found = it->find(name);
+    if (found != it->end()) {
+      type = found->second->getAllocatedType();
+      return found->second;
+    }
+  }
+  auto g = GlobalNamedValues.find(name);
+  if (g != GlobalNamedValues.end()) {
+    type = g->second->getValueType();
+    return g->second;
+  }
+  return nullptr;
+}
+
+/// CreateEntryBlockAlloca - stack slot in the function's entry block
+static AllocaInst *CreateEntryBlockAlloca(Function *F, llvm::Type *T, const std::string &name) {
+  IRBuilder<> TmpB(&F->getEntryBlock(), F->getEntryBlock().begin());
+  return TmpB.CreateAlloca(T, nullptr, name);
+}
+
+// ---------- expressions ----------
+
+Value *IntASTnode::codegen() {
+  return ConstantInt::get(llvm::Type::getInt32Ty(TheContext), Val, true);
+}
+
+Value *FloatASTnode::codegen() {
+  return ConstantFP::get(llvm::Type::getFloatTy(TheContext), Val);
+}
+
+Value *BoolASTnode::codegen() {
+  return ConstantInt::get(llvm::Type::getInt1Ty(TheContext), Bool ? 1 : 0);
+}
+
+Value *VariableASTnode::codegen() {
+  llvm::Type *T = nullptr;
+  Value *Ptr = lookupVariable(Name, T);
+  if (!Ptr)
+    return LogSemanticError(Tok, "Scope", "use of undeclared variable '" + Name + "'");
+  return Builder.CreateLoad(T, Ptr, Name);
+}
+
+Value *UnaryExprAST::codegen() {
+  Value *V = Operand->codegen();
+  if (OpTok.type == NOT)
+    return Builder.CreateNot(toBool(V, OpTok, "operator '!'"), "nottmp");
+
+  // unary minus, bool promoted to int first as in C
+  if (V->getType()->isIntegerTy(1))
+    V = widen(V, llvm::Type::getInt32Ty(TheContext), OpTok, "unary '-'");
+  if (V->getType()->isFloatTy())
+    return Builder.CreateFNeg(V, "negtmp");
+  if (V->getType()->isIntegerTy(32))
+    return Builder.CreateNeg(V, "negtmp");
+  return LogSemanticError(OpTok, "Type", "invalid operand of type " + typeName(V->getType()) + " to unary '-'");
+}
+
+/// codegenLogical - && and || with short-circuit evaluation
+static Value *codegenLogical(const TOKEN &OpTok, ASTnode *Left, ASTnode *Right) {
+  bool IsAnd = (OpTok.type == AND);
+  std::string Ctx = "operator '" + OpTok.lexeme + "'";
+  llvm::Type *BoolTy = llvm::Type::getInt1Ty(TheContext);
+
+  Value *L = toBool(Left->codegen(), OpTok, Ctx);
+  Function *F = Builder.GetInsertBlock()->getParent();
+  BasicBlock *LeftEnd = Builder.GetInsertBlock();
+  BasicBlock *RightBB = BasicBlock::Create(TheContext, IsAnd ? "and.rhs" : "or.rhs", F);
+  BasicBlock *MergeBB = BasicBlock::Create(TheContext, IsAnd ? "and.end" : "or.end", F);
+
+  // && only evaluates the right side if the left is true, || only if it is false
+  if (IsAnd)
+    Builder.CreateCondBr(L, RightBB, MergeBB);
+  else
+    Builder.CreateCondBr(L, MergeBB, RightBB);
+
+  Builder.SetInsertPoint(RightBB);
+  Value *R = toBool(Right->codegen(), OpTok, Ctx);
+  BasicBlock *RightEnd = Builder.GetInsertBlock();
+  Builder.CreateBr(MergeBB);
+
+  Builder.SetInsertPoint(MergeBB);
+  PHINode *PN = Builder.CreatePHI(BoolTy, 2, IsAnd ? "andtmp" : "ortmp");
+  // right side skipped, so && is false and || is true
+  PN->addIncoming(ConstantInt::get(BoolTy, IsAnd ? 0 : 1), LeftEnd);
+  PN->addIncoming(R, RightEnd);
+  return PN;
+}
+
+Value *BinaryExprAST::codegen() {
+  if (OpTok.type == AND || OpTok.type == OR)
+    return codegenLogical(OpTok, Left.get(), Right.get());
+
+  Value *L = Left->codegen();
+  Value *R = Right->codegen();
+  std::string Ctx = "operator '" + OpTok.lexeme + "'";
+  if (L->getType()->isVoidTy() || R->getType()->isVoidTy())
+    return LogSemanticError(OpTok, "Type", "void value used in " + Ctx);
+
+  // widen both operands to the wider type, bool promoted to at least int
+  llvm::Type *T = typeRank(L->getType()) >= typeRank(R->getType()) ? L->getType() : R->getType();
+  if (T->isIntegerTy(1))
+    T = llvm::Type::getInt32Ty(TheContext);
+  L = widen(L, T, OpTok, Ctx);
+  R = widen(R, T, OpTok, Ctx);
+  bool IsFloat = T->isFloatTy();
+
+  switch (OpTok.type) {
+  case PLUS:
+    return IsFloat ? Builder.CreateFAdd(L, R, "addtmp") : Builder.CreateAdd(L, R, "addtmp");
+  case MINUS:
+    return IsFloat ? Builder.CreateFSub(L, R, "subtmp") : Builder.CreateSub(L, R, "subtmp");
+  case ASTERIX:
+    return IsFloat ? Builder.CreateFMul(L, R, "multmp") : Builder.CreateMul(L, R, "multmp");
+  case DIV:
+    return IsFloat ? Builder.CreateFDiv(L, R, "divtmp") : Builder.CreateSDiv(L, R, "divtmp");
+  case MOD:
+    // % only for integers, as in C
+    if (IsFloat)
+      return LogSemanticError(OpTok, "Type", "operator '%' requires int operands, not float");
+    return Builder.CreateSRem(L, R, "modtmp");
+  case EQ:
+    return IsFloat ? Builder.CreateFCmpOEQ(L, R, "eqtmp") : Builder.CreateICmpEQ(L, R, "eqtmp");
+  case NE:
+    return IsFloat ? Builder.CreateFCmpUNE(L, R, "netmp") : Builder.CreateICmpNE(L, R, "netmp");
+  case LT:
+    return IsFloat ? Builder.CreateFCmpOLT(L, R, "lttmp") : Builder.CreateICmpSLT(L, R, "lttmp");
+  case LE:
+    return IsFloat ? Builder.CreateFCmpOLE(L, R, "letmp") : Builder.CreateICmpSLE(L, R, "letmp");
+  case GT:
+    return IsFloat ? Builder.CreateFCmpOGT(L, R, "gttmp") : Builder.CreateICmpSGT(L, R, "gttmp");
+  case GE:
+    return IsFloat ? Builder.CreateFCmpOGE(L, R, "getmp") : Builder.CreateICmpSGE(L, R, "getmp");
+  }
+  return LogSemanticError(OpTok, "Internal", "unknown binary operator '" + OpTok.lexeme + "'");
+}
+
+Value *AssignExprAST::codegen() {
+  llvm::Type *T = nullptr;
+  Value *Ptr = lookupVariable(Var->getName(), T);
+  if (!Ptr)
+    return LogSemanticError(Var->getTok(), "Scope", "assignment to undeclared variable '" + Var->getName() + "'");
+  Value *V = widen(RHS->codegen(), T, Var->getTok(), "assignment to '" + Var->getName() + "'");
+  Builder.CreateStore(V, Ptr);
+  // value of the assignment is the stored value, so a = b = c works
+  return V;
+}
+
+Value *ArgsAST::codegen() {
+  Function *F = TheModule->getFunction(Callee);
+  if (!F)
+    return LogSemanticError(Tok, "Scope", "call to undeclared function '" + Callee + "'");
+  // argument count must match exactly
+  if (F->arg_size() != ArgsList.size())
+    return LogSemanticError(Tok, "Arity", "function '" + Callee + "' expects " +
+                                     std::to_string(F->arg_size()) + " argument(s) but " +
+                                     std::to_string(ArgsList.size()) + " were given");
+  std::vector<Value *> Args;
+  unsigned i = 0;
+  for (auto &Arg : F->args()) {
+    Value *V = ArgsList[i]->codegen();
+    Args.push_back(widen(V, Arg.getType(), Tok,
+                         "argument " + std::to_string(i + 1) + " of call to '" + Callee + "'"));
+    i++;
+  }
+  // a void call has no value, so it can't be named
+  if (F->getReturnType()->isVoidTy())
+    return Builder.CreateCall(F, Args);
+  return Builder.CreateCall(F, Args, "calltmp");
+}
+
+// ---------- statements ----------
+
+Value *ReturnAST::codegen() {
+  if (!Val) {
+    if (!CurrentReturnType->isVoidTy())
+      return LogSemanticError(RetTok, "Type", "non-void function must return a value of type " + typeName(CurrentReturnType));
+    Builder.CreateRetVoid();
+  } else {
+    if (CurrentReturnType->isVoidTy())
+      return LogSemanticError(RetTok, "Type", "void function cannot return a value");
+    Builder.CreateRet(widen(Val->codegen(), CurrentReturnType, RetTok, "return statement"));
+  }
+  return nullptr;
+}
+
+Value *IfExprAST::codegen() {
+  Value *C = toBool(Cond->codegen(), noPos(), "if statement");
+  Function *F = Builder.GetInsertBlock()->getParent();
+  BasicBlock *ThenBB = BasicBlock::Create(TheContext, "then", F);
+  BasicBlock *ElseBB = Else ? BasicBlock::Create(TheContext, "else", F) : nullptr;
+  BasicBlock *MergeBB = BasicBlock::Create(TheContext, "ifcont", F);
+  Builder.CreateCondBr(C, ThenBB, Else ? ElseBB : MergeBB);
+
+  Builder.SetInsertPoint(ThenBB);
+  Then->codegen();
+  // only jump to the merge block if the branch didn't already end
+  if (!Builder.GetInsertBlock()->getTerminator())
+    Builder.CreateBr(MergeBB);
+
+  if (Else) {
+    Builder.SetInsertPoint(ElseBB);
+    Else->codegen();
+    if (!Builder.GetInsertBlock()->getTerminator())
+      Builder.CreateBr(MergeBB);
+  }
+  Builder.SetInsertPoint(MergeBB);
+  return nullptr;
+}
+
+Value *WhileExprAST::codegen() {
+  Function *F = Builder.GetInsertBlock()->getParent();
+  BasicBlock *CondBB = BasicBlock::Create(TheContext, "while.cond", F);
+  BasicBlock *BodyBB = BasicBlock::Create(TheContext, "while.body", F);
+  BasicBlock *EndBB = BasicBlock::Create(TheContext, "while.end", F);
+  Builder.CreateBr(CondBB);
+
+  // loop header, condition tested every iteration
+  Builder.SetInsertPoint(CondBB);
+  Value *C = toBool(Cond->codegen(), noPos(), "while statement");
+  Builder.CreateCondBr(C, BodyBB, EndBB);
+
+  Builder.SetInsertPoint(BodyBB);
+  Body->codegen();
+  // jump back to the header unless the body already ended
+  if (!Builder.GetInsertBlock()->getTerminator())
+    Builder.CreateBr(CondBB);
+
+  Builder.SetInsertPoint(EndBB);
+  return nullptr;
+}
+
+Value *BlockAST::codegen() {
+  // function body shares the parameters' scope, other blocks open a new one
+  bool OwnScope = !NextBlockIsFunctionBody;
+  NextBlockIsFunctionBody = false;
+  if (OwnScope)
+    Scopes.emplace_back();
+
+  for (auto &D : LocalDecls)
+    D->codegen();
+  for (auto &S : Stmts) {
+    S->codegen();
+    // stop after a return, the rest of the block is unreachable
+    if (Builder.GetInsertBlock()->getTerminator())
+      break;
+  }
+
+  if (OwnScope)
+    Scopes.pop_back();
+  return nullptr;
+}
+
+// ---------- declarations ----------
+
+Value *VarDeclAST::codegen() {
+  const std::string &Name = Var->getName();
+  // shadowing is allowed, redeclaring in the same scope is not
+  if (Scopes.back().count(Name))
+    return LogSemanticError(Var->getTok(), "Scope", "redeclaration of variable '" + Name + "' in the same scope");
+  llvm::Type *T = getLLVMType(Type);
+  Function *F = Builder.GetInsertBlock()->getParent();
+  AllocaInst *A = CreateEntryBlockAlloca(F, T, Name);
+  // locals start at zero
+  Builder.CreateStore(zeroValue(T), A);
+  Scopes.back()[Name] = A;
+  return nullptr;
+}
+
+Value *GlobVarDeclAST::codegen() {
+  const std::string &Name = Var->getName();
+  // globals can only be defined once
+  if (GlobalNamedValues.count(Name) || TheModule->getFunction(Name))
+    return LogSemanticError(Var->getTok(), "Scope", "redefinition of global '" + Name + "'");
+  llvm::Type *T = getLLVMType(Type);
+  // common linkage and a zero value as in the LLVM IR lecture, globals start at 0
+  auto *G = new GlobalVariable(*TheModule, T, false, GlobalValue::CommonLinkage,
+                               Constant::getNullValue(T), Name);
+  G->setAlignment(MaybeAlign(4));
+  GlobalNamedValues[Name] = G;
+  return G;
+}
+
+Function *FunctionPrototypeAST::codegen() {
+  std::vector<llvm::Type *> ParamTypes;
+  for (auto &P : Params)
+    ParamTypes.push_back(getLLVMType(P->getType()));
+  FunctionType *FT = FunctionType::get(getLLVMType(Type), ParamTypes, false);
+
+  // redeclaring a function (e.g. extern then definition) needs the same signature
+  if (Function *Existing = TheModule->getFunction(Name)) {
+    if (Existing->getFunctionType() != FT) {
+      LogSemanticError(Tok, "Type", "conflicting declarations of function '" + Name + "'");
+      return nullptr;
+    }
+    return Existing;
+  }
+  if (GlobalNamedValues.count(Name)) {
+    LogSemanticError(Tok, "Scope", "'" + Name + "' is already declared as a global variable");
+    return nullptr;
+  }
+
+  Function *F = Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+  unsigned i = 0;
+  for (auto &Arg : F->args())
+    Arg.setName(Params[i++]->getName());
+  return F;
+}
+
+Value *FunctionDeclAST::codegen() {
+  Function *F = Proto->codegen();
+  // only one body per function
+  if (!F->empty())
+    return LogSemanticError(Proto->getTok(), "Scope", "redefinition of function '" + Proto->getName() + "'");
+
+  BasicBlock *Entry = BasicBlock::Create(TheContext, "entry", F);
+  Builder.SetInsertPoint(Entry);
+  CurrentReturnType = F->getReturnType();
+
+  // parameters live in the function body scope
+  Scopes.clear();
+  Scopes.emplace_back();
+  unsigned i = 0;
+  for (auto &Arg : F->args()) {
+    std::string ArgName = Proto->getParams()[i++]->getName();
+    if (Scopes.back().count(ArgName))
+      return LogSemanticError(Proto->getTok(), "Scope", "duplicate parameter '" + ArgName + "' in function '" + Proto->getName() + "'");
+    AllocaInst *A = CreateEntryBlockAlloca(F, Arg.getType(), ArgName);
+    Builder.CreateStore(&Arg, A);
+    Scopes.back()[ArgName] = A;
+  }
+
+  NextBlockIsFunctionBody = true;
+  Block->codegen();
+
+  // the last block still needs a terminator
+  BasicBlock *Last = Builder.GetInsertBlock();
+  if (!Last->getTerminator()) {
+    if (Last != Entry && Last->hasNPredecessors(0)) {
+      // block no path reaches, e.g. after if/else that both return
+      Builder.CreateUnreachable();
+    } else if (CurrentReturnType->isVoidTy()) {
+      Builder.CreateRetVoid();
+    } else {
+      // C allows falling off the end, so warn like clang and return zero
+      fprintf(stderr, "Warning: non-void function '%s' can reach the end without a return\n",
+              Proto->getName().c_str());
+      Builder.CreateRet(zeroValue(CurrentReturnType));
+    }
+  }
+  Scopes.clear();
+
+  // check the generated function is valid
+  if (verifyFunction(*F, &errs()))
+    return LogSemanticError(noPos(), "Internal", "invalid IR generated for function '" + Proto->getName() + "'");
+  return F;
+}
+
+Value *ProgramAST::codegen() {
+  for (auto &E : Externs)
+    E->codegen();
+  for (auto &D : Decls)
+    D->codegen();
+  return nullptr;
+}
+
 //===----------------------------------------------------------------------===//
 // AST Printer
 //===----------------------------------------------------------------------===//
@@ -1562,8 +2058,10 @@ static std::unique_ptr<Module> TheModule;
 int main(int argc, char **argv) {
   if (argc == 2) {
     pFile = fopen(argv[1], "r");
-    if (pFile == NULL)
+    if (pFile == NULL) {
       perror("Error opening file");
+      return 1;
+    }
   } else {
     std::cout << "Usage: ./code InputFile\n";
     return 1;
@@ -1583,9 +2081,17 @@ int main(int argc, char **argv) {
 
   /* UNCOMMENT : Task 2 - Parser */
   auto Root = parser();
-  fprintf(stderr, "Parsing Finished\n");  
   // print the whole AST to stdout
   llvm::outs() << *Root << "\n";
+
+  // generate IR for the whole program, semantic errors exit
+  Root->codegen();
+
+  // check the whole module is valid IR before writing it
+  if (verifyModule(*TheModule, &errs())) {
+    fprintf(stderr, "Internal error: generated IR is invalid\n");
+    return 1;
+  }
 
   printf(
       "********************* FINAL IR (begin) ****************************\n");
