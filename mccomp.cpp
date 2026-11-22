@@ -437,13 +437,6 @@ static TOKEN getNextToken() {
 
 static void putBackToken(TOKEN tok) { tok_buffer.push_front(tok); }
 
-// to look at the token after CurTok without consuming it
-static TOKEN peekToken() {
-  if (tok_buffer.empty())
-    tok_buffer.push_back(gettok());
-  return tok_buffer.front();
-}
-
 /// indent - leading spaces for a node printed at the given tree depth
 static std::string astIndent(int depth) { return std::string(depth * 2, ' '); }
 
@@ -455,6 +448,8 @@ public:
   virtual Value *codegen() { return nullptr; };
   // returns this node and its children as an indented tree - one node per line
   virtual std::string to_string(int depth = 0) const { return ""; };
+  // only the vars and array elements can be on the left of =
+  virtual bool isAssignable() const { return false; }
 };
 
 // a class for integer literals
@@ -519,6 +514,7 @@ public:
   const TOKEN &getTok() const { return Tok; }
   Value *codegen() override;
   std::string to_string(int depth = 0) const override {
+    bool isAssignable() const override {return true;}
     return astIndent(depth) + "Variable " + Name + "\n";
   }
 };
@@ -618,8 +614,7 @@ public:
         Right(std::move(right)) {}
   Value *codegen() override;
   std::string to_string(int depth = 0) const override {
-    return astIndent(depth) + "BinaryExpr '" + OpTok.lexeme + "'\n" +
-           Left->to_string(depth + 1) + Right->to_string(depth + 1);
+    return astIndent(depth) + "BinaryExpr '" + OpTok.lexeme + "'\n" + Left->to_string(depth + 1) + Right->to_string(depth + 1);
   }
 };
 
@@ -1083,18 +1078,21 @@ static std::unique_ptr<ASTnode> ParseRval() {
   return LHS;
 }
 
-// expr ::= IDENT "=" expr | rval
-// LL(2): If the current token is a name and the next token is '=', parse an assignment
+// expr ::= rval expr_tail
+// expr_tail ::= "=" expr | epsilon
+// the left of = must be a variable or an arr element
 static std::unique_ptr<ASTnode> ParseExper() {
-  if (CurTok.type == IDENT && peekToken().type == ASSIGN) {
-    TOKEN IdTok = CurTok;
-    getNextToken(); // eat IDENT
-    getNextToken(); // eat '='
-    auto Var = std::make_unique<VariableASTnode>(IdTok, IdTok.lexeme);
-    auto RHS = ParseExper(); // right-recursive, so a = b = c is right-associative
-    return std::make_unique<AssignExprAST>(std::move(Var), std::move(RHS));
-  }
-  return ParseRval();
+  auto LHS = ParseRval();
+  if (CurTok.type != ASSIGN)
+    return LHS;
+  if (!LHS->isAssignable())
+    return LogError(CurTok, "left side of the '=' must be a variable or an array element");
+  // consume '='
+  getNextToken();
+  // right-recursive, so a = b = c is right-associative
+  auto RHS = ParseExper();
+  std::unique_ptr<VariableASTnode> Var(static_cast<VariableASTnode *>(LHS.release()));
+  return std::make_unique<AssignExprAST>(std::move(Var), std::move(RHS));
 }
 
 // expr_stmt ::= expr ";"|  ";"
@@ -1206,8 +1204,7 @@ static std::unique_ptr<ASTnode> ParseWhileStmt() {
     auto Body = ParseStmt();
     // an empty statement ';' as the body becomes an empty block
     if (!Body)
-      Body = std::make_unique<BlockAST>(std::vector<std::unique_ptr<VarDeclAST>>(),
-                                        std::vector<std::unique_ptr<ASTnode>>());
+      Body = std::make_unique<BlockAST>(std::vector<std::unique_ptr<VarDeclAST>>(),std::vector<std::unique_ptr<ASTnode>>());
 
     return std::make_unique<WhileExprAST>(std::move(Cond), std::move(Body));
   } else
@@ -1391,8 +1388,7 @@ static std::unique_ptr<ASTnode> ParseBlock() {
     return nullptr;
   }
 
-  return std::make_unique<BlockAST>(std::move(local_decls),
-                                    std::move(stmt_list));
+  return std::make_unique<BlockAST>(std::move(local_decls), std::move(stmt_list));
 }
 
 // decl ::= var_decl
