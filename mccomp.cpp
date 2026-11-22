@@ -848,6 +848,31 @@ static bool isFirstOfStmt(int t) {
   return isFirstOfExpr(t) || t == SC || t == LBRA || t == IF || t == WHILE || t == RETURN;
 }
 
+// array_dims ::= "[" INT_LIT "]" array_dims | epsilon
+// arrays have 1 to 3 dimensions
+static std::vector<int> ParseArrayDimensions() {
+  std::vector<int> dimensions;
+  while (CurTok.type == LBOX) {
+    if (dimensions.size() == 3)
+      LogError(CurTok, "arrays are capped to  have at most 3 dimensions");
+    // eat '['
+    getNextToken();
+    if (CurTok.type != INT_LIT)
+      LogError(CurTok, "array size must be an integer literal");
+    if (CurTok.getIntVal() <= 0)
+      LogError(CurTok, "array size must be greater than 0");
+    dimensions.push_back(CurTok.getIntVal());
+    // eat the size
+    getNextToken();
+    if (CurTok.type != RBOX)
+      LogError(CurTok, "expected ']' after declaring the array size");
+    // eat ']'
+    getNextToken();
+  }
+  return dimensions;
+}
+
+
 // element ::= FLOAT_LIT
 static std::unique_ptr<ASTnode> ParseFloatNumberExpr() {
   auto Result = std::make_unique<FloatASTnode>(CurTok, CurTok.getFloatVal());
@@ -894,7 +919,7 @@ static std::vector<std::unique_ptr<ParamAST>> ParseParamListPrime() {
   return param_list;
 }
 
-// param ::= var_type IDENT
+// param ::= var_type IDENT array_dims
 static std::unique_ptr<ParamAST> ParseParam() {
   if (CurTok.type != INT_TOK && CurTok.type != FLOAT_TOK &&
       CurTok.type != BOOL_TOK) {
@@ -908,10 +933,14 @@ static std::unique_ptr<ParamAST> ParseParam() {
     LogError(CurTok, "expected parameter name after type");
     return nullptr;
   }
-  std::string Name = CurTok.getIdentifierStr();
-  getNextToken(); // eat IDENT
 
-  return std::make_unique<ParamAST>(Name, Type);
+
+    std::string Name = CurTok.getIdentifierStr();
+  // consumes the IDENT
+  getNextToken(); 
+  auto dimensions = ParseArrayDimensions();
+
+  return std::make_unique<ParamAST>(Name, Type, dimensions);
 }
 
 // param_list ::= param param_list_prime
