@@ -1032,7 +1032,7 @@ static std::unique_ptr<ASTnode> ParsePrimary() {
       getNextToken();
       return std::make_unique<ArgsAST>(IdTok, IdTok.lexeme, std::move(Args));
     }
-        // identifier_tail ::= index_list, an array element
+    // identifier_tail ::= index_list, an array element
     if (CurTok.type == LBOX) {
       std::vector<std::unique_ptr<ASTnode>> Indices;
       while (CurTok.type == LBOX) {
@@ -1040,7 +1040,7 @@ static std::unique_ptr<ASTnode> ParsePrimary() {
         getNextToken();
         Indices.push_back(ParseExper());
         if (CurTok.type != RBOX)
-          return LogError(CurTok, "expected ']' after array index");
+          return LogError(CurTok, " expected an ']' after the array index");
         // eat ']'
         getNextToken();
       }
@@ -1381,10 +1381,8 @@ static std::vector<std::unique_ptr<VarDeclAST>> ParseLocalDeclsPrime() {
   return local_decls_prime;
 }
 
-// local_decl ::= var_type IDENT ";"
-// var_type ::= "int"
-//           |  "float"
-//           |  "bool"
+// local_decl ::= var_type IDENT array_dims ";"
+// var_type ::= "int" |  "float"|  "bool"
 static std::unique_ptr<VarDeclAST> ParseLocalDecl() {
   TOKEN PrevTok;
   std::string Type;
@@ -1398,10 +1396,11 @@ static std::unique_ptr<VarDeclAST> ParseLocalDecl() {
     if (CurTok.type == IDENT) {
       Type = PrevTok.lexeme;
       Name = CurTok.getIdentifierStr(); // save the identifier name
-      auto ident = std::make_unique<VariableASTnode>(CurTok, Name);
-      local_decl = std::make_unique<VarDeclAST>(std::move(ident), Type);
-
+            auto ident = std::make_unique<VariableASTnode>(CurTok, Name);
       getNextToken(); // eat 'IDENT'
+      auto dimensions = ParseArrayDimensions();
+      local_decl = std::make_unique<VarDeclAST>(std::move(ident), Type, dimensions);
+
       if (CurTok.type != SC) {
         LogError(CurTok, "expected ';' to end local variable declaration");
         return nullptr;
