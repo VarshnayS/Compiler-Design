@@ -512,9 +512,9 @@ public:
   const IDENT_TYPE getVarType() const { return VarType; }
   // getter for token
   const TOKEN &getTok() const { return Tok; }
+  bool isAssignable() const override { return true; }
   Value *codegen() override;
   std::string to_string(int depth = 0) const override {
-    bool isAssignable() const override {return true;}
     return astIndent(depth) + "Variable " + Name + "\n";
   }
 };
@@ -1894,13 +1894,13 @@ Value *IfExprAST::codegen() {
   Builder.SetInsertPoint(ThenBB);
   Then->codegen();
   // only jump to the merge block if the branch didn't already end
-  if (!Builder.GetInsertBlock()->getTerminator())
+  if (!blockEnded(Builder.GetInsertBlock()))
     Builder.CreateBr(MergeBB);
 
   if (Else) {
     Builder.SetInsertPoint(ElseBB);
     Else->codegen();
-    if (!Builder.GetInsertBlock()->getTerminator())
+    if (!blockEnded(Builder.GetInsertBlock()))
       Builder.CreateBr(MergeBB);
   }
   Builder.SetInsertPoint(MergeBB);
@@ -1922,7 +1922,7 @@ Value *WhileExprAST::codegen() {
   Builder.SetInsertPoint(BodyBB);
   Body->codegen();
   // jump back to the header unless the body already ended
-  if (!Builder.GetInsertBlock()->getTerminator())
+  if (!blockEnded(Builder.GetInsertBlock()))
     Builder.CreateBr(CondBB);
 
   Builder.SetInsertPoint(EndBB);
@@ -1941,7 +1941,7 @@ Value *BlockAST::codegen() {
   for (auto &S : Stmts) {
     S->codegen();
     // stop after a return, the rest of the block is unreachable
-    if (Builder.GetInsertBlock()->getTerminator())
+    if (blockEnded(Builder.GetInsertBlock()))
       break;
   }
 
@@ -2043,7 +2043,7 @@ Value *FunctionDeclAST::codegen() {
 
   // check that the generated function is valid
   if (verifyFunction(*F, &errs()))
-    return LogSemanticError(noPosition()), "Internal", "invalid IR generated for function '" + Proto->getName() + "'");
+    return LogSemanticError(noPosition(), "Internal", "invalid IR generated for function '" + Proto->getName() + "'");
   return F;
 }
 
