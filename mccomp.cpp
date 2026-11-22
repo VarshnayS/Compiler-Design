@@ -1585,7 +1585,7 @@ static llvm::Type *CurrentReturnType = nullptr;
 static bool NextBlockIsFunctionBody = false;
 
 /// token with no source position
-static TOKEN (noPosition) {
+static TOKEN noPosition() {
   TOKEN t;
   t.lineNo = 0;
   t.columnNo = 0;
@@ -1689,6 +1689,11 @@ static Value *lookupVariable(const std::string &name, llvm::Type *&type) {
     return g->second;
   }
   return nullptr;
+}
+
+/// true if the block already ends in a branch or return
+static bool blockEnded(BasicBlock *BB) {
+  return !BB->empty() && BB->back().isTerminator();
 }
 
 // stack slot in the functions entry block
@@ -1883,7 +1888,7 @@ Value *ReturnAST::codegen() {
 }
 
 Value *IfExprAST::codegen() {
-  Value *C = toBool(Cond->codegen(), noPosition), "if statement");
+  Value *C = toBool(Cond->codegen(), noPosition(), "if statement");
   Function *F = Builder.GetInsertBlock()->getParent();
   BasicBlock *ThenBB = BasicBlock::Create(TheContext, "then", F);
   BasicBlock *ElseBB = Else ? BasicBlock::Create(TheContext, "else", F) : nullptr;
@@ -1915,7 +1920,7 @@ Value *WhileExprAST::codegen() {
 
   // loop header, condition tested every iteration
   Builder.SetInsertPoint(CondBB);
-  Value *C = toBool(Cond->codegen(), noPosition), "while statement");
+  Value *C = toBool(Cond->codegen(), noPosition(), "while statement");
   Builder.CreateCondBr(C, BodyBB, EndBB);
 
   Builder.SetInsertPoint(BodyBB);
@@ -2042,7 +2047,7 @@ Value *FunctionDeclAST::codegen() {
 
   // check that the generated function is valid
   if (verifyFunction(*F, &errs()))
-    return LogSemanticError(noPosition), "Internal", "invalid IR generated for function '" + Proto->getName() + "'");
+    return LogSemanticError(noPosition()), "Internal", "invalid IR generated for function '" + Proto->getName() + "'");
   return F;
 }
 
