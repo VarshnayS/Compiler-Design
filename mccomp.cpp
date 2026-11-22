@@ -1345,31 +1345,22 @@ static std::unique_ptr<ASTnode> ParseDecl() {
   return nullptr;
 }
 
-// decl_list_prime ::= decl decl_list_prime
-//                  |  ε
-static void ParseDeclListPrime() {
-  if (CurTok.type == VOID_TOK || CurTok.type == INT_TOK ||
-      CurTok.type == FLOAT_TOK || CurTok.type == BOOL_TOK) { // FIRST(decl)
+// decl_list ::= decl decl_list'
+// decl_list' ::= decl decl_list' | epsilon
+static std::vector<std::unique_ptr<ASTnode>> ParseDeclList() {
+  std::vector<std::unique_ptr<ASTnode>> decls;
+  decls.push_back(ParseDecl());
 
-    if (auto decl = ParseDecl()) {
-      fprintf(stderr, "Parsed a top-level variable or function declaration\n");
-    }
-    ParseDeclListPrime();
-  } else if (CurTok.type == EOF_TOK) { // FOLLOW(decl_list_prime)
-    // expand by decl_list_prime ::= ε
-    // do nothing
-  } else { // syntax error
-    LogError(CurTok, "expected 'void', 'int', 'bool' or 'float' or EOF token");
+  // decl_list': keep parsing while the next token is in FIRST(decl)
+  while (CurTok.type == VOID_TOK || CurTok.type == INT_TOK ||
+         CurTok.type == FLOAT_TOK || CurTok.type == BOOL_TOK) {
+    decls.push_back(ParseDecl());
   }
-}
 
-// decl_list ::= decl decl_list_prime
-static void ParseDeclList() {
-  auto decl = ParseDecl();
-  if (decl) {
-    fprintf(stderr, "Parsed a top-level variable or function declaration\n");
-    ParseDeclListPrime();
-  }
+  // FOLLOW(decl_list') = { EOF }
+  if (CurTok.type != EOF_TOK)
+    LogError(CurTok, "expected a declaration ('void', 'int', 'float' or 'bool') or end of file");
+  return decls;
 }
 
 // extern ::= "extern" type_spec IDENT "(" params ")" ";"
@@ -1427,47 +1418,34 @@ static std::unique_ptr<FunctionPrototypeAST> ParseExtern() {
   return nullptr;
 }
 
-// extern_list_prime ::= extern extern_list_prime
-//                   |  ε
-static void ParseExternListPrime() {
+// extern_list ::= extern extern_list'
+// extern_list' ::= extern extern_list' | epsilon
+static std::vector<std::unique_ptr<FunctionPrototypeAST>> ParseExternList() {
+  std::vector<std::unique_ptr<FunctionPrototypeAST>> externs;
+  externs.push_back(ParseExtern());
 
-  if (CurTok.type == EXTERN) { // FIRST(extern)
-    if (auto Extern = ParseExtern()) {
-      fprintf(stderr,
-              "Parsed a top-level external function declaration -- 2\n");
-    }
-    ParseExternListPrime();
-  } else if (CurTok.type == VOID_TOK || CurTok.type == INT_TOK ||
-             CurTok.type == FLOAT_TOK ||
-             CurTok.type == BOOL_TOK) { // FOLLOW(extern_list_prime)
-    // expand by decl_list_prime ::= ε
-    // do nothing
-  } else { // syntax error
-    LogError(CurTok, "expected 'extern' or 'void',  'int' ,  'float',  'bool'");
+  // extern_list': keep parsing while the next token is in FIRST(extern)
+  while (CurTok.type == EXTERN) {
+    externs.push_back(ParseExtern());
   }
+
+  // FOLLOW(extern_list') = FIRST(decl_list)
+  if (CurTok.type != VOID_TOK && CurTok.type != INT_TOK &&
+      CurTok.type != FLOAT_TOK && CurTok.type != BOOL_TOK)
+    LogError(CurTok, "expected 'extern' or a declaration ('void', 'int', 'float' or 'bool')");
+  return externs;
 }
 
-// extern_list ::= extern extern_list_prime
-static void ParseExternList() {
-  auto Extern = ParseExtern();
-  if (Extern) {
-    fprintf(stderr, "Parsed a top-level external function declaration -- 1\n");
-    // fprintf(stderr, "Current token: %s \n", CurTok.lexeme.c_str());
-    if (CurTok.type == EXTERN)
-      ParseExternListPrime();
-  }
-}
+// program ::= extern_list decl_list | decl_list
+static std::unique_ptr<ProgramAST> parser() {
+  std::vector<std::unique_ptr<FunctionPrototypeAST>> externs;
 
-// program ::= extern_list decl_list
-static void parser() {
-  if (CurTok.type == EOF_TOK)
-    return;
-  ParseExternList();
-  if (CurTok.type == EOF_TOK)
-    return;
-  ParseDeclList();
-  if (CurTok.type == EOF_TOK)
-    return;
+  // FIRST(extern_list) selects the first alternative
+  if (CurTok.type == EXTERN)
+    externs = ParseExternList();
+
+  auto decls = ParseDeclList();
+  return std::make_unique<ProgramAST>(std::move(externs), std::move(decls));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1513,7 +1491,7 @@ int main(int argc, char **argv) {
   // Run the parser now.
 
   /* UNCOMMENT : Task 2 - Parser */
-   parser();
+   auto Root = parser();
    fprintf(stderr, "Parsing Finished\n");  
 
   printf(
