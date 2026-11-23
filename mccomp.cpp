@@ -1647,6 +1647,18 @@ static std::unique_ptr<Module> TheModule;
 static std::vector<std::map<std::string, AllocaInst *>> Scopes;
 // global variables 
 static std::map<std::string, GlobalVariable *> GlobalNamedValues;
+
+// details of an array
+struct ArrayInfo {
+  llvm::Type *ElemTy;
+  std::vector<int> dimensions;
+  // an array parameter holds the pointer to the first element
+  bool IsParam;
+};
+
+// array details keyed by the variable's storage (alloca or global)
+static std::map<Value *, ArrayInfo> ArrayInfoMap;
+
 // return type of the function being generated
 static llvm::Type *CurrentReturnType = nullptr;
 // set so a function body shares the parameters's scope
@@ -1768,6 +1780,14 @@ static bool blockEnded(BasicBlock *BB) {
 static AllocaInst *CreateEntryBlockAlloca(Function *F, llvm::Type *T, const std::string &name) {
   IRBuilder<> TmpB(&F->getEntryBlock(), F->getEntryBlock().begin());
   return TmpB.CreateAlloca(T, nullptr, name);
+}
+
+/// LLVM array type 
+static llvm::Type *getArrayType(llvm::Type *elemType, const std::vector<int> &dimensions) {
+  llvm::Type *T = elemType;
+  for (int i = (int)dimensions.size() - 1; i >= 0; i--)
+    T = ArrayType::get(T, dimensions[i]);
+  return T;
 }
 
 // expressions
@@ -2031,6 +2051,18 @@ Value *VarDeclAST::codegen() {
     return LogSemanticError(Var->getTok(), "Scope", "redeclaration of variable '" + Name + "' in the same scope");
   llvm::Type *T = getLLVMType(Type);
   Function *F = Builder.GetInsertBlock()->getParent();
+  if (!dimensions.empty()) {
+    // only int and float arrays are allowed
+    if (Type == "bool")
+      return LogSemanticError(Var->getTok(), "Type", "arrays of type 'bool' aren't allowed");
+    llvm::Type *AT = getArrayType(T, dimensions);
+    AllocaInst *A = CreateEntryBlockAlloca(F, AT, Name);
+    // every element starts at 0
+    Builder.CreateStore(Constant::getNullValue(AT), A);
+    ArrayInfoMap[A] = {T, dimensions, false};
+    Scopes.back()[Name] = A;
+    return nullptr;
+  }
   AllocaInst *A = CreateEntryBlockAlloca(F, T, Name);
   // locals start at zero
   Builder.CreateStore(zeroValue(T), A);
@@ -2044,10 +2076,19 @@ Value *GlobVarDeclAST::codegen() {
   if (GlobalNamedValues.count(Name) || TheModule->getFunction(Name))
     return LogSemanticError(Var->getTok(), "Scope", "redefinition of global '" + Name + "'");
   llvm::Type *T = getLLVMType(Type);
-  // common linkage and a zero value as in the LLVM IR lecture, globals start at 0
-  auto *G = new GlobalVariable(*TheModule, T, false, GlobalValue::CommonLinkage,
-                               Constant::getNullValue(T), Name);
+  // a global array uses an array type (slide 70)
+  llvm::Type *GT = T;
+  if (!dimensions.empty()) {
+    // only int and float arrays are allowed
+    if (Type == "bool")
+      return LogSemanticError(Var->getTok(), "Type", "arrays of type 'bool' aren't allowed");
+    GT = getArrayType(T, dimensions);
+  }
+  // common linkage and a zero value 
+  auto *G = new GlobalVariable(*TheModule, GT, false, GlobalValue::CommonLinkage, Constant::getNullValue(GT), Name);
   G->setAlignment(MaybeAlign(4));
+  if (!dimensions.empty())
+    ArrayInfoMap[G] = {T, dimensions, false};
   GlobalNamedValues[Name] = G;
   return G;
 }
