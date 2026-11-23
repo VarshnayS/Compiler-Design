@@ -458,6 +458,7 @@ public:
   virtual std::string to_string(int depth = 0) const { return ""; };
   // only the vars and array elements can be on the left of =
   virtual bool isAssignable() const { return false; }
+  virtual bool isPlainVariable() const { return false; }
 };
 
 // a class for integer literals
@@ -521,6 +522,7 @@ public:
   // getter for token
   const TOKEN &getTok() const { return Tok; }
   bool isAssignable() const override { return true; }
+  bool isPlainVariable() const override { return true; }
   Value *codegen() override;
   // address to store into when the variable is assigned to
   virtual Value *codegenAddress(llvm::Type *&type);
@@ -537,9 +539,11 @@ class ArrayAccessAST : public VariableASTnode {
 public:
   ArrayAccessAST(TOKEN tok, const std::string &Name, std::vector<std::unique_ptr<ASTnode>> indices)
       : VariableASTnode(tok, Name), Indices(std::move(indices)) {}
-    Value *codegen() override;
-    Value *codegenAddress(llvm::Type *&type) override;
-    std::string to_string(int depth = 0) const override {
+  // an element is a single value not a whole array
+  bool isPlainVariable() const override { return false; }
+  Value *codegen() override;
+  Value *codegenAddress(llvm::Type *&type) override;
+  std::string to_string(int depth = 0) const override {
     std::string s = astIndent(depth) + "ArrayAccess " + Name + "\n";
     for (const auto &I : Indices)
       s += astIndent(depth + 1) + "Index\n" + I->to_string(depth + 2);
@@ -1901,10 +1905,10 @@ Value *UnaryExprAST::codegen() {
 /// && and || with short-circuit evaluation
 static Value *codegenLogical(const TOKEN &OpTok, ASTnode *Left, ASTnode *Right) {
   bool IsAnd = (OpTok.type == AND);
-  std::string Ctx = "operator '" + OpTok.lexeme + "'";
+  std::string context = "operator '" + OpTok.lexeme + "'";
   llvm::Type *BoolTy = llvm::Type::getInt1Ty(TheContext);
 
-  Value *L = toBool(Left->codegen(), OpTok, Ctx);
+  Value *L = toBool(Left->codegen(), OpTok, context);
   Function *F = Builder.GetInsertBlock()->getParent();
   BasicBlock *LeftEnd = Builder.GetInsertBlock();
   BasicBlock *RightBB = BasicBlock::Create(TheContext, IsAnd ? "and.rhs" : "or.rhs", F);
@@ -1917,7 +1921,7 @@ static Value *codegenLogical(const TOKEN &OpTok, ASTnode *Left, ASTnode *Right) 
     Builder.CreateCondBr(L, MergeBB, RightBB);
 
   Builder.SetInsertPoint(RightBB);
-  Value *R = toBool(Right->codegen(), OpTok, Ctx);
+  Value *R = toBool(Right->codegen(), OpTok, context);
   BasicBlock *RightEnd = Builder.GetInsertBlock();
   Builder.CreateBr(MergeBB);
 
@@ -1935,16 +1939,16 @@ Value *BinaryExprAST::codegen() {
 
   Value *L = Left->codegen();
   Value *R = Right->codegen();
-  std::string Ctx = "operator '" + OpTok.lexeme + "'";
+  std::string context = "operator '" + OpTok.lexeme + "'";
   if (L->getType()->isVoidTy() || R->getType()->isVoidTy())
-    return LogSemanticError(OpTok, "Type", "void value used in " + Ctx);
+    return LogSemanticError(OpTok, "Type", "void value used in " + context);
 
   // widen both operands to the wider type, bool promoted to at least int
   llvm::Type *T = typeRank(L->getType()) >= typeRank(R->getType()) ? L->getType() : R->getType();
   if (T->isIntegerTy(1))
     T = llvm::Type::getInt32Ty(TheContext);
-  L = widen(L, T, OpTok, Ctx);
-  R = widen(R, T, OpTok, Ctx);
+  L = widen(L, T, OpTok, context);
+  R = widen(R, T, OpTok, context);
   bool IsFloat = T->isFloatTy();
 
     switch (OpTok.type) {
@@ -2007,6 +2011,30 @@ Value *AssignExprAST::codegen() {
   return V;
 }
 
+/// helper function-pointer passed for an array argument
+static Value *arrayArgumentPointer(ASTnode *ArgNode, const ArrayInfo &Want, const TOKEN &tok, const std::string &context) {
+  if (!ArgNode->isPlainVariable())
+    return LogSemanticError(tok, "Array", context + " has to be an array name");
+  // safe to do since only variables are plain variables
+  auto *Var = static_cast<VariableASTnode *>(ArgNode);
+  llvm::Type *T = nullptr;
+  Value *Ptr = lookupVariable(Var->getName(), T);
+  if (!Ptr)
+    return LogSemanticError(Var->getTok(), "Scope", "use of an undeclared variable '" + Var->getName() + "'");
+  auto It = ArrayInfoMap.find(Ptr);
+  if (It == ArrayInfoMap.end())
+    return LogSemanticError(Var->getTok(), "Array", context + " has to be an array but '" + Var->getName() + "' isn't one");
+  const ArrayInfo &Have = It->second;
+  // same element type, same number of dimensions, and the same sizes after the first
+  bool Match = Have.ElemTy == Want.ElemTy && Have.dimensions.size() == Want.dimensions.size() && std::equal(Have.dimensions.begin() + 1, Have.dimensions.end(), Want.dimensions.begin() + 1);
+  if (!Match)
+    return LogSemanticError(Var->getTok(), "Array", "array '" + Var->getName() + "' is " + typeName(Have.ElemTy) +
+      dimsString(Have.dimensions) + " but " + context + " needs " + typeName(Want.ElemTy) + dimsString(Want.dimensions));
+  if (Have.IsParam)
+    return Builder.CreateLoad(T, Ptr, Var->getName());
+  return Ptr;
+}
+
 Value *ArgsAST::codegen() {
   Function *F = TheModule->getFunction(Callee);
   if (!F)
@@ -2017,11 +2045,14 @@ Value *ArgsAST::codegen() {
                                      std::to_string(F->arg_size()) + " argument(s) but " +
                                      std::to_string(ArgsList.size()) + " were given");
   std::vector<Value *> Args;
+  std::vector<ArrayInfo> &ParamInfo = FunctionArrayParams[F];
   unsigned i = 0;
   for (auto &Arg : F->args()) {
-    Value *V = ArgsList[i]->codegen();
-    Args.push_back(widen(V, Arg.getType(), Tok,
-                         "argument " + std::to_string(i + 1) + " of call to '" + Callee + "'"));
+    std::string context = "argument " + std::to_string(i + 1) + " of call to '" + Callee + "'";
+    if (!ParamInfo[i].dimensions.empty())
+      Args.push_back(arrayArgumentPointer(ArgsList[i].get(), ParamInfo[i], Tok, context));
+    else
+      Args.push_back(widen(ArgsList[i]->codegen(), Arg.getType(), Tok, context));
     i++;
   }
   // a void call has no value, so it can't be named
