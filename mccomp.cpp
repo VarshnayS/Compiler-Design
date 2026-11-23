@@ -1844,10 +1844,10 @@ Value *ArrayAccessAST::codegenAddress(llvm::Type *&type) {
     return LogSemanticError(Tok, "Array", "array '" + Name + "' has " + std::to_string(Info.dimensions.size()) +
       " dimension(s) but " + std::to_string(Indices.size()) + " index(es) were given");
 
-  std::vector<Value *> idces;
+  std::vector<Value *> idce;
   // a local or global array is indexed from its start, so the first index is 0
   if (!Info.IsParam)
-    idces.push_back(Builder.getInt32(0));
+    idce.push_back(Builder.getInt32(0));
   for (unsigned i = 0; i < Indices.size(); i++) {
     Value *V = Indices[i]->codegen();
     // an index must be an int, a bool widens to int
@@ -1861,7 +1861,7 @@ Value *ArrayAccessAST::codegenAddress(llvm::Type *&type) {
         return LogSemanticError(Tok, "Array", "index " + std::to_string(N) + " is out of bounds for dimension " +
           std::to_string(i + 1) + " of '" + Name + "' (size " + std::to_string(Info.dimensions[i]) + ")");
     }
-    idces.push_back(V);
+    idce.push_back(V);
   }
   type = Info.ElemTy;
   if (!Info.IsParam)
