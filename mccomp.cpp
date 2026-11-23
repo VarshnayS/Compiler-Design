@@ -522,6 +522,8 @@ public:
   const TOKEN &getTok() const { return Tok; }
   bool isAssignable() const override { return true; }
   Value *codegen() override;
+  // address to store into when the variable is assigned to
+  virtual Value *codegenAddress(llvm::Type *&type);
   std::string to_string(int depth = 0) const override {
     return astIndent(depth) + "Variable " + Name + "\n";
   }
@@ -535,7 +537,9 @@ class ArrayAccessAST : public VariableASTnode {
 public:
   ArrayAccessAST(TOKEN tok, const std::string &Name, std::vector<std::unique_ptr<ASTnode>> indices)
       : VariableASTnode(tok, Name), Indices(std::move(indices)) {}
-  std::string to_string(int depth = 0) const override {
+    Value *codegen() override;
+    Value *codegenAddress(llvm::Type *&type) override;
+    std::string to_string(int depth = 0) const override {
     std::string s = astIndent(depth) + "ArrayAccess " + Name + "\n";
     for (const auto &I : Indices)
       s += astIndent(depth + 1) + "Index\n" + I->to_string(depth + 2);
@@ -1804,12 +1808,76 @@ Value *BoolASTnode::codegen() {
   return ConstantInt::get(llvm::Type::getInt1Ty(TheContext), Bool ? 1 : 0);
 }
 
+
 Value *VariableASTnode::codegen() {
   llvm::Type *T = nullptr;
   Value *Ptr = lookupVariable(Name, T);
   if (!Ptr)
     return LogSemanticError(Tok, "Scope", "use of undeclared variable '" + Name + "'");
+  // a whole array cannot be used as a value
+  if (ArrayInfoMap.count(Ptr))
+    return LogSemanticError(Tok, "Array", "array '" + Name + "' cannot be used without an index");
   return Builder.CreateLoad(T, Ptr, Name);
+}
+
+// address of the variable
+Value *VariableASTnode::codegenAddress(llvm::Type *&type) {
+  Value *Ptr = lookupVariable(Name, type);
+  if (!Ptr)
+    return LogSemanticError(Tok, "Scope", "assignment to undeclared variable '" + Name + "'");
+  if (ArrayInfoMap.count(Ptr))
+    return LogSemanticError(Tok, "Array", "cannot assign to the whole array '" + Name + "'");
+  return Ptr;
+}
+
+// address of an array element with getelementptr 
+Value *ArrayAccessAST::codegenAddress(llvm::Type *&type) {
+  llvm::Type *T = nullptr;
+  Value *Ptr = lookupVariable(Name, T);
+  if (!Ptr)
+    return LogSemanticError(Tok, "Scope", "use of undeclared array '" + Name + "'");
+  auto It = ArrayInfoMap.find(Ptr);
+  if (It == ArrayInfoMap.end())
+    return LogSemanticError(Tok, "Array", "'" + Name + "' is not an array, so it cannot be indexed");
+  ArrayInfo &Info = It->second;
+  if (Indices.size() != Info.dimensions.size())
+    return LogSemanticError(Tok, "Array", "array '" + Name + "' has " + std::to_string(Info.dimensions.size()) +
+      " dimension(s) but " + std::to_string(Indices.size()) + " index(es) were given");
+
+  std::vector<Value *> idces;
+  // a local or global array is indexed from its start, so the first index is 0
+  if (!Info.IsParam)
+    idces.push_back(Builder.getInt32(0));
+  for (unsigned i = 0; i < Indices.size(); i++) {
+    Value *V = Indices[i]->codegen();
+    // an index must be an int, a bool widens to int
+    if (V->getType()->isFloatTy())
+      return LogSemanticError(Tok, "Type", "array index must be an int, not float");
+    V = widen(V, Builder.getInt32Ty(), Tok, "array index");
+    // a constant index can be bounds checked now
+    if (isa<ConstantInt>(V)) {
+      int64_t N = cast<ConstantInt>(V)->getSExtValue();
+      if (N < 0 || N >= Info.dimensions[i])
+        return LogSemanticError(Tok, "Array", "index " + std::to_string(N) + " is out of bounds for dimension " +
+          std::to_string(i + 1) + " of '" + Name + "' (size " + std::to_string(Info.dimensions[i]) + ")");
+    }
+    idces.push_back(V);
+  }
+  type = Info.ElemTy;
+  if (!Info.IsParam)
+    return Builder.CreateInBoundsGEP(getArrayType(Info.ElemTy, Info.dimensions), Ptr, idce, Name + ".elem");
+
+  // a parameter holds a pointer, so load it and step over the remaining dimensions
+  Value *Base = Builder.CreateLoad(T, Ptr, Name);
+  std::vector<int> Inner(Info.dimensions.begin() + 1, Info.dimensions.end());
+  return Builder.CreateInBoundsGEP(getArrayType(Info.ElemTy, Inner), Base, idce, Name + ".elem");
+}
+
+// an array element is read like a variable
+Value *ArrayAccessAST::codegen() {
+  llvm::Type *T = nullptr;
+  Value *Ptr = codegenAddress(T);
+  return Builder.CreateLoad(T, Ptr, Name + ".val");
 }
 
 Value *UnaryExprAST::codegen() {
@@ -1928,9 +1996,8 @@ Value *BinaryExprAST::codegen() {
 
 Value *AssignExprAST::codegen() {
   llvm::Type *T = nullptr;
-  Value *Ptr = lookupVariable(Var->getName(), T);
-  if (!Ptr)
-    return LogSemanticError(Var->getTok(), "Scope", "assignment to undeclared variable '" + Var->getName() + "'");
+  // a plain variable or an array element
+  Value *Ptr = Var->codegenAddress(T);
   Value *V = widen(RHS->codegen(), T, Var->getTok(), "assignment to '" + Var->getName() + "'");
   Builder.CreateStore(V, Ptr);
   // value of the assignment is the stored value, so a = b = c works
@@ -2076,7 +2143,7 @@ Value *GlobVarDeclAST::codegen() {
   if (GlobalNamedValues.count(Name) || TheModule->getFunction(Name))
     return LogSemanticError(Var->getTok(), "Scope", "redefinition of global '" + Name + "'");
   llvm::Type *T = getLLVMType(Type);
-  // a global array uses an array type (slide 70)
+  // a global array uses an array type 
   llvm::Type *GT = T;
   if (!dimensions.empty()) {
     // only int and float arrays are allowed
