@@ -1663,6 +1663,9 @@ struct ArrayInfo {
 // array details keyed by the variable's storage (alloca or global)
 static std::map<Value *, ArrayInfo> ArrayInfoMap;
 
+// array details of each function's parameters- uses epmty dimensions for a scalar
+static std::map<Function *, std::vector<ArrayInfo>> FunctionArrayParams;
+
 // return type of the function being generated
 static llvm::Type *CurrentReturnType = nullptr;
 // set so a function body shares the parameters's scope
@@ -2160,15 +2163,36 @@ Value *GlobVarDeclAST::codegen() {
   return G;
 }
 
+
 Function *FunctionPrototypeAST::codegen() {
   std::vector<llvm::Type *> ParamTypes;
-  for (auto &P : Params)
-    ParamTypes.push_back(getLLVMType(P->getType()));
+  std::vector<ArrayInfo> ParamInfo;
+  for (auto &P : Params) {
+    llvm::Type *T = getLLVMType(P->getType());
+    if (P->getDimensions().empty()) {
+      ParamTypes.push_back(T);
+      ParamInfo.push_back({nullptr, {}, false});
+      continue;
+    }
+    if (P->getType() == "bool") {
+      LogSemanticError(Tok, "Type", "arrays of type 'bool' aren't allowed");
+      return nullptr;
+    }
+    // an array parameter is passed as a pointer
+    ParamTypes.push_back(Builder.getPtrTy());
+    ParamInfo.push_back({T, P->getDimensions(), true});
+  }
   FunctionType *FT = FunctionType::get(getLLVMType(Type), ParamTypes, false);
 
-  // redeclaring a function (e.g. extern then definition) needs the same signature
+  // redeclaring a function needs the same signature
   if (Function *Existing = TheModule->getFunction(Name)) {
-    if (Existing->getFunctionType() != FT) {
+    // every pointer looks the same so the array sizes are compared too
+    bool SameArrays = true;
+    std::vector<ArrayInfo> &Old = FunctionArrayParams[Existing];
+    for (unsigned i = 0; i < Old.size() && i < ParamInfo.size(); i++)
+      if (Old[i].ElemTy != ParamInfo[i].ElemTy || Old[i].dimensions != ParamInfo[i].dimensions)
+        SameArrays = false;
+    if (Existing->getFunctionType() != FT || !SameArrays) {
       LogSemanticError(Tok, "Type", "conflicting declarations of function '" + Name + "'");
       return nullptr;
     }
@@ -2180,6 +2204,7 @@ Function *FunctionPrototypeAST::codegen() {
   }
 
   Function *F = Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+  FunctionArrayParams[F] = ParamInfo;
   unsigned i = 0;
   for (auto &Arg : F->args())
     Arg.setName(Params[i++]->getName());
@@ -2190,7 +2215,7 @@ Value *FunctionDeclAST::codegen() {
   Function *F = Proto->codegen();
   // only one body per function
   if (!F->empty())
-    return LogSemanticError(Proto->getTok(), "Scope", "redefinition of function '" + Proto->getName() + "'");
+    return LogSemanticError(Proto->getTok(), "Scope", "function '" + Proto->getName() + "' already has a body, so it cant be defined again");
 
   BasicBlock *Entry = BasicBlock::Create(TheContext, "entry", F);
   Builder.SetInsertPoint(Entry);
@@ -2201,12 +2226,16 @@ Value *FunctionDeclAST::codegen() {
   Scopes.emplace_back();
   unsigned i = 0;
   for (auto &Arg : F->args()) {
-    std::string ArgName = Proto->getParams()[i++]->getName();
+    std::string ArgName = Proto->getParams()[i]->getName();
     if (Scopes.back().count(ArgName))
       return LogSemanticError(Proto->getTok(), "Scope", "duplicate parameter '" + ArgName + "' in function '" + Proto->getName() + "'");
     AllocaInst *A = CreateEntryBlockAlloca(F, Arg.getType(), ArgName);
     Builder.CreateStore(&Arg, A);
+    // an array parameter keeps its element type and sizes
+    if (!FunctionArrayParams[F][i].dimensions.empty())
+      ArrayInfoMap[A] = FunctionArrayParams[F][i];
     Scopes.back()[ArgName] = A;
+    i++;
   }
 
   NextBlockIsFunctionBody = true;
